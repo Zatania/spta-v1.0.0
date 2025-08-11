@@ -1,0 +1,72 @@
+// pages/api/payments/bulk.js
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '../../auth/[...nextauth]'
+import db from '../../db' // adjust path
+
+/**
+ * POST /api/payments/bulk
+ * Body:
+ * {
+ *   activity_assignment_id,
+ *   records: [
+ *     { student_id, paid: 0|1, payment_date: 'YYYY-MM-DD' | null }
+ *   ]
+ * }
+ *
+ * Upserts payments table.
+ * Enforces teacher permission similar to attendance.
+ */
+export default async function handler(req, res) {
+  try {
+    if (req.method !== 'POST') return res.status(405).json({ message: 'Method not allowed' })
+
+    const session = await getServerSession(req, res, authOptions)
+    if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+    const { activity_assignment_id, records } = req.body
+    if (!activity_assignment_id || !Array.isArray(records)) return res.status(400).json({ message: 'Invalid payload' })
+
+    const [aa] = await db.query('SELECT * FROM activity_assignments WHERE id = ? LIMIT 1', [activity_assignment_id])
+    if (!aa.length) return res.status(404).json({ message: 'Assignment not found' })
+    const assignment = aa[0]
+
+    if (session.user.role === 'teacher') {
+      const [ok] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
+        session.user.id,
+        assignment.section_id
+      ])
+      if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
+    }
+
+    // Build bulk insert params
+    const values = []
+    const params = []
+    const now = new Date()
+    for (const r of records) {
+      const sid = r.student_id
+      const paid = r.paid ? 1 : 0
+      const payment_date = r.payment_date ? r.payment_date : null
+      values.push('(?, ?, ?, ?, ?, ?)')
+      params.push(activity_assignment_id, sid, paid, payment_date, session.user.id, now)
+    }
+
+    if (!values.length) return res.status(400).json({ message: 'No records to save' })
+
+    const sql = `
+      INSERT INTO payments (activity_assignment_id, student_id, paid, payment_date, marked_by, marked_at)
+      VALUES ${values.join(', ')}
+      ON DUPLICATE KEY UPDATE
+        paid = VALUES(paid),
+        payment_date = VALUES(payment_date),
+        marked_by = VALUES(marked_by),
+        marked_at = VALUES(marked_at)
+    `
+    await db.query(sql, params)
+
+    return res.status(200).json({ message: 'Payments saved' })
+  } catch (err) {
+    console.error('payments bulk error:', err)
+
+    return res.status(500).json({ message: 'Internal server error' })
+  }
+}

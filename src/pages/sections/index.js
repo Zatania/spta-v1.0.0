@@ -1,123 +1,142 @@
 // pages/admin/sections.js
-import { useEffect, useState, useCallback } from 'react'
-import { Box, Button, TextField, MenuItem, IconButton, Tooltip, CircularProgress, InputAdornment } from '@mui/material'
+import { useEffect, useState } from 'react'
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  TextField,
+  MenuItem,
+  IconButton,
+  Tooltip,
+  Alert,
+  InputAdornment,
+  CircularProgress
+} from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
+import { DataGrid } from '@mui/x-data-grid'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
 import axios from 'axios'
-import { DataGrid } from '@mui/x-data-grid'
-import debounce from 'lodash.debounce'
 
 export default function SectionsPage() {
   const [sections, setSections] = useState([])
   const [grades, setGrades] = useState([])
   const [loading, setLoading] = useState(false)
-  const [total, setTotal] = useState(0)
+  const [error, setError] = useState(null)
 
-  // filters
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({ id: null, grade_id: '', name: '' })
+  const [saving, setSaving] = useState(false)
+
+  // Filters & Pagination
   const [search, setSearch] = useState('')
-  const [gradeFilter, setGradeFilter] = useState('')
-  const [assignedFilter, setAssignedFilter] = useState('') // '', '1', '0'
+  const [filterGrade, setFilterGrade] = useState('')
+  const [filterAssigned, setFilterAssigned] = useState('')
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(10)
+  const [rowCount, setRowCount] = useState(0)
 
-  // pagination
-  const [page, setPage] = useState(0) // 0-based for DataGrid
-  const [pageSize, setPageSize] = useState(25)
-
-  // fetch grades
-  useEffect(() => {
-    axios.get('/api/grades').then(r => setGrades(r.data ?? []))
-  }, [])
-
-  // fetch sections with filters/pagination
-  const fetchSections = useCallback(
-    async (opts = {}) => {
-      setLoading(true)
-      try {
-        const params = {
-          search: opts.search ?? search,
-          grade_id: opts.gradeFilter ?? gradeFilter,
-          assigned: opts.assignedFilter ?? assignedFilter,
-          page: (opts.page ?? page) + 1, // API is 1-based
-          page_size: opts.pageSize ?? pageSize
+  const fetchSections = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { data } = await axios.get('/api/sections', {
+        params: {
+          search,
+          grade_id: filterGrade || undefined,
+          assigned: filterAssigned || undefined,
+          page: page + 1, // assuming backend is 1-based page
+          pageSize
         }
+      })
+      setSections(data.sections ?? [])
+      setRowCount(data.total ?? 0)
+    } catch (err) {
+      setError(err?.response?.data?.message ?? 'Failed to load sections')
+    } finally {
+      setLoading(false)
+    }
+  }
 
-        // remove empty params to keep urls clean
-        Object.keys(params).forEach(k => {
-          if (params[k] === '' || params[k] == null) delete params[k]
-        })
-
-        const res = await axios.get('/api/sections', { params })
-        setSections(res.data.sections ?? [])
-        setTotal(res.data.total ?? 0)
-      } catch (err) {
-        console.error('Failed to load sections', err)
-      } finally {
-        setLoading(false)
-      }
-    },
-    [search, gradeFilter, assignedFilter, page, pageSize]
-  )
-
-  // debounced version of fetch when user types search
-  const debouncedFetch = useCallback(
-    debounce(s => {
-      fetchSections({ search: s, page: 0 })
-      setPage(0)
-    }, 400),
-    [fetchSections]
-  )
+  const fetchGrades = async () => {
+    try {
+      const { data } = await axios.get('/api/grades')
+      setGrades(data ?? [])
+    } catch (err) {
+      console.error('Failed to load grades', err)
+    }
+  }
 
   useEffect(() => {
     fetchSections()
+  }, [search, filterGrade, filterAssigned, page, pageSize])
 
-    // cleanup debounce on unmount
-    return () => debouncedFetch.cancel()
-  }, [fetchSections])
+  useEffect(() => {
+    fetchGrades()
+  }, [])
 
-  // when search input changes, use debounce
-  const onSearchChange = e => {
-    const v = e.target.value
-    setSearch(v)
-    debouncedFetch(v)
+  const handleOpen = (row = null) => {
+    if (row) {
+      setForm({ id: row.id, grade_id: row.grade_id, name: row.section_name })
+    } else {
+      setForm({ id: null, grade_id: '', name: '' })
+    }
+    setOpen(true)
   }
 
-  // when grade/assigned changed, reset page and fetch
-  useEffect(() => {
-    fetchSections({ page: 0 })
-    setPage(0)
-  }, [gradeFilter, assignedFilter]) // eslint-disable-line
+  const handleClose = () => setOpen(false)
+
+  const handleSave = async () => {
+    if (!form.grade_id || !form.name) return
+    setSaving(true)
+    try {
+      if (form.id) {
+        await axios.put(`/api/sections/${form.id}`, { grade_id: form.grade_id, name: form.name })
+      } else {
+        await axios.post('/api/sections', { grade_id: form.grade_id, name: form.name })
+      }
+      await fetchSections()
+      setOpen(false)
+    } catch (err) {
+      alert(err?.response?.data?.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async id => {
+    if (!confirm('Soft-delete this section? It will be hidden from lists if no blockers exist.')) return
+    try {
+      await axios.delete(`/api/sections/${id}`)
+      fetchSections()
+    } catch (err) {
+      alert(err?.response?.data?.message ?? 'Delete failed')
+    }
+  }
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 80 },
-    { field: 'grade_name', headerName: 'Grade', width: 140 },
-    { field: 'section_name', headerName: 'Section', flex: 1, minWidth: 160 },
-    {
-      field: 'assigned',
-      headerName: 'Assigned',
-      width: 130,
-      renderCell: params => {
-        const a = params.row.assigned
-        const teacher = params.row.assigned_teacher
-
-        return a ? (teacher ? `${teacher.full_name}` : 'Yes') : 'Unassigned'
-      }
-    },
+    { field: 'grade_name', headerName: 'Grade', flex: 1 },
+    { field: 'section_name', headerName: 'Section', flex: 2 },
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
+      width: 140,
       sortable: false,
       filterable: false,
       renderCell: params => (
         <>
           <Tooltip title='Edit'>
-            <IconButton size='small'>
+            <IconButton size='small' onClick={() => handleOpen(params.row)}>
               <EditIcon fontSize='small' />
             </IconButton>
           </Tooltip>
           <Tooltip title='Delete'>
-            <IconButton size='small' color='error'>
+            <IconButton size='small' onClick={() => handleDelete(params.row.id)}>
               <DeleteIcon fontSize='small' />
             </IconButton>
           </Tooltip>
@@ -131,9 +150,12 @@ export default function SectionsPage() {
       <Box display='flex' gap={2} alignItems='center' mb={2} flexWrap='wrap'>
         <TextField
           size='small'
-          placeholder='Search sections or grade...'
+          placeholder='Search'
           value={search}
-          onChange={onSearchChange}
+          onChange={e => {
+            setSearch(e.target.value)
+            setPage(0)
+          }}
           InputProps={{
             startAdornment: (
               <InputAdornment position='start'>
@@ -141,16 +163,17 @@ export default function SectionsPage() {
               </InputAdornment>
             )
           }}
-          sx={{ minWidth: 300 }}
+          sx={{ minWidth: 280 }}
         />
-
         <TextField
           select
           size='small'
           label='Grade'
-          value={gradeFilter}
-          onChange={e => setGradeFilter(e.target.value)}
-          sx={{ minWidth: 180 }}
+          value={filterGrade}
+          onChange={e => {
+            setFilterGrade(e.target.value)
+            setPage(0)
+          }}
         >
           <MenuItem value=''>All Grades</MenuItem>
           {grades.map(g => (
@@ -159,50 +182,85 @@ export default function SectionsPage() {
             </MenuItem>
           ))}
         </TextField>
-
         <TextField
           select
           size='small'
           label='Assigned'
-          value={assignedFilter}
-          onChange={e => setAssignedFilter(e.target.value)}
+          value={filterAssigned}
+          onChange={e => {
+            setFilterAssigned(e.target.value)
+            setPage(0)
+          }}
           sx={{ minWidth: 160 }}
         >
           <MenuItem value=''>All</MenuItem>
           <MenuItem value='1'>Assigned</MenuItem>
           <MenuItem value='0'>Unassigned</MenuItem>
         </TextField>
-
         <Box sx={{ flexGrow: 1 }} />
-
-        <Button startIcon={<AddIcon />} variant='contained'>
+        <Button startIcon={<AddIcon />} variant='contained' onClick={() => handleOpen()}>
           Add Section
         </Button>
       </Box>
 
-      <div style={{ width: '100%' }}>
-        <DataGrid
-          rows={sections}
-          columns={columns}
-          autoHeight
-          pageSize={pageSize}
-          rowCount={total}
-          paginationMode='server'
-          onPageChange={newPage => {
-            setPage(newPage)
-            fetchSections({ page: newPage })
-          }}
-          onPageSizeChange={newSize => {
-            setPageSize(newSize)
-            fetchSections({ page: 0, pageSize: newSize })
-            setPage(0)
-          }}
-          page={page}
-          rowsPerPageOptions={[10, 25, 50, 100]}
-          getRowId={r => r.id}
-          loading={loading}
-        />
-      </div>
+      {loading ? (
+        <Box display='flex' justifyContent='center' p={4}>
+          <CircularProgress />
+        </Box>
+      ) : error ? (
+        <Alert severity='error'>{error}</Alert>
+      ) : (
+        <div style={{ width: '100%' }}>
+          <DataGrid
+            rows={sections}
+            columns={columns}
+            autoHeight
+            pagination
+            pageSize={pageSize}
+            page={page}
+            rowCount={rowCount}
+            paginationMode='server'
+            onPageChange={newPage => setPage(newPage)}
+            onPageSizeChange={newSize => {
+              setPageSize(newSize)
+              setPage(0)
+            }}
+            rowsPerPageOptions={[10, 25, 50]}
+            getRowId={r => r.id}
+          />
+        </div>
+      )}
+
+      <Dialog open={open} onClose={handleClose}>
+        <DialogTitle>{form.id ? 'Edit Section' : 'Add Section'}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          <TextField
+            select
+            label='Grade'
+            value={form.grade_id}
+            onChange={e => setForm({ ...form, grade_id: e.target.value })}
+          >
+            {grades.map(g => (
+              <MenuItem key={g.id} value={g.id}>
+                {g.name}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            label='Section Name'
+            value={form.name}
+            onChange={e => setForm({ ...form, name: e.target.value })}
+          />
+        </DialogContent>
+
+        <DialogActions>
+          <Button onClick={handleClose}>Cancel</Button>
+          <Button variant='contained' onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

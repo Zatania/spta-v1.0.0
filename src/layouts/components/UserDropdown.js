@@ -144,7 +144,7 @@ const UserDropdown = props => {
           </Box>
         </Box>
         <Divider />
-        {session?.user.role === 'admin' ? (
+        {/* {session?.user.role === 'admin' ? (
           <MenuItem sx={{ p: 0 }} onClick={() => handleDropdownClose('/bao/settings/account')}>
             <Box sx={styles}>
               <Icon icon='mdi:cog-outline' />
@@ -158,7 +158,7 @@ const UserDropdown = props => {
               Settings
             </Box>
           </MenuItem>
-        ) : null}
+        ) : null} */}
         <Divider />
         <MenuItem
           onClick={handleLogout}

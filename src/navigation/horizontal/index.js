@@ -6,6 +6,13 @@ const navigation = () => {
       path: '/dashboard'
     },
     {
+      title: 'Dashboard',
+      icon: 'mdi:home-outline',
+      path: '/teacher/dashboard',
+      action: 'read',
+      subject: 'teacher-dashboard'
+    },
+    {
       title: 'Manage',
       icon: 'mdi:file-document-outline',
       children: [

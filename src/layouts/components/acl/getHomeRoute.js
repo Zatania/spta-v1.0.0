@@ -3,7 +3,7 @@
  */
 const getHomeRoute = role => {
   if (role === 'admin') return '/dashboard'
-  else return '/students'
+  else return '/teacher/dashboard'
 }
 
 export default getHomeRoute

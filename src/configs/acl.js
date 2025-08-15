@@ -11,10 +11,14 @@ const defineRulesFor = (role, subject) => {
   const { can, rules } = new AbilityBuilder(AppAbility)
   if (role === 'admin') {
     can('manage', 'all')
+    cannot(['read'], 'teacher-dashboard')
+    cannot(['read'], 'teacher-activity')
   } else if (role === 'teacher') {
     can(['read'], 'students-page')
     can(['read'], 'activities-page')
     can(['read'], 'attendance-page')
+    can(['read'], 'teacher-dashboard')
+    can(['read'], 'teacher-activity')
   } else {
     can(['read', 'create', 'update', 'delete'], subject)
   }

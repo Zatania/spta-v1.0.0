@@ -152,7 +152,7 @@ export default function AttendancePage() {
   }
 
   const columns = [
-    { field: 'lrn', headerName: 'LRN', width: 110 },
+    { field: 'lrn', headerName: 'LRN', width: 200 },
     { field: 'last_name', headerName: 'Last name', width: 160 },
     { field: 'first_name', headerName: 'First name', width: 160 },
     {
@@ -214,7 +214,7 @@ export default function AttendancePage() {
     {
       field: 'payment_date',
       headerName: 'Payment Date',
-      width: 160,
+      width: 190,
       renderCell: params => {
         const raw = params.value ?? ''
 

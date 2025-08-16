@@ -11,7 +11,7 @@ import path from 'path'
  * - Embeds transparent PNG logos (if present)
  * - Aligns logos vertically to the center of the header text block
  * - Lists only activities created by the logged-in teacher assigned to the student's section
- * - Groups activities by date (desc) and adds a Parent Present checkbox + Signature column
+ * - Groups activities by date (desc) and adds a Signature column (Parent Present column removed)
  */
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
@@ -92,22 +92,6 @@ export default async function handler(req, res) {
       params
     )
 
-    // --- Attendance map for pre-checking Parent Present ---
-    const aaIds = actRows.map(r => r.activity_assignment_id).filter(Boolean)
-    let attendanceMap = new Map()
-    if (aaIds.length) {
-      const [attRows] = await db.query(
-        `
-        SELECT activity_assignment_id, parent_present
-        FROM attendance
-        WHERE activity_assignment_id IN (${aaIds.map(() => '?').join(',')})
-          AND student_id = ?
-        `,
-        [...aaIds, studentId]
-      )
-      for (const r of attRows) attendanceMap.set(Number(r.activity_assignment_id), !!r.parent_present)
-    }
-
     // --- Group activities by date (YYYY-MM-DD) preserving descending order ---
     const groups = []
     for (const r of actRows) {
@@ -125,8 +109,7 @@ export default async function handler(req, res) {
         activity_assignment_id: r.activity_assignment_id,
         activity_id: r.activity_id,
         title: r.title,
-        date: r.activity_date,
-        parent_present: attendanceMap.get(Number(r.activity_assignment_id)) || false
+        date: r.activity_date
       })
     }
 
@@ -248,7 +231,7 @@ export default async function handler(req, res) {
     // Move doc.y to after the header block (plus small spacing)
     doc.y = Math.max(yCursor, logoTopY + logosHeight) + 8
 
-    // --- Info lines with fixed two-column layout to ensure alignment ---
+    // --- Info lines with underlined text values ---
     const labelColWidth = 190
     const valueColStartX = left + labelColWidth + 8
     const underlineRight = right
@@ -264,86 +247,131 @@ export default async function handler(req, res) {
     for (const row of infoRows) {
       const yBefore = doc.y
       doc.text(row.label, left, yBefore, { width: labelColWidth - 8, align: 'left' })
-      const maxValueWidth = underlineRight - valueColStartX
-      doc.text(row.value, valueColStartX, yBefore, { width: maxValueWidth })
-      const underlineY = Math.max(yBefore, doc.y) + 8
-      doc.moveTo(valueColStartX, underlineY).lineTo(underlineRight, underlineY).lineWidth(0.4).stroke()
+
+      // Draw underlined text value
+      doc.font('Helvetica').fontSize(10)
+      doc.text(row.value, valueColStartX, yBefore, {
+        width: underlineRight - valueColStartX,
+        underline: true
+      })
       doc.moveDown(0.6)
     }
 
     doc.moveDown(0.4)
 
-    // --- Activity table header and body (unchanged logic) ---
+    // --- Activity table header and body (FIXED: Removed Parent Present column) ---
     const tableLeft = left
     const tableWidth = right - tableLeft
-    const colActivity = Math.round(tableWidth * 0.4)
-    const colDate = Math.round(tableWidth * 0.15)
-    const colParentPresent = Math.round(tableWidth * 0.3)
-    const colSignature = tableWidth - colActivity - colDate - colParentPresent
-    const rowHeight = 22
+
+    // Updated column widths - removed Parent Present column
+    const colActivity = Math.round(tableWidth * 0.5) // Increased from 0.4
+    const colDate = Math.round(tableWidth * 0.2) // Increased from 0.15
+    const colSignature = tableWidth - colActivity - colDate // Remaining width
+    const rowHeight = 25 // Slightly increased for better alignment
     let y = doc.y + 6
 
-    // header row box
+    // Draw table header with proper borders
     doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
-    doc.font('Helvetica-Bold').fontSize(10)
-    doc.text('ACTIVITY', tableLeft + 6, y + 6, { width: colActivity - 12 })
-    doc.text('DATE', tableLeft + colActivity + 6, y + 6, { width: colDate - 12 })
-    doc.text('PARENT PRESENT', tableLeft + colActivity + colDate + 6, y + 6, {
-      width: colParentPresent - 12,
-      align: 'center'
+
+    // Draw vertical separators for header
+    doc
+      .moveTo(tableLeft + colActivity, y)
+      .lineTo(tableLeft + colActivity, y + rowHeight)
+      .stroke()
+    doc
+      .moveTo(tableLeft + colActivity + colDate, y)
+      .lineTo(tableLeft + colActivity + colDate, y + rowHeight)
+      .stroke()
+
+    // Header text with proper vertical centering
+    doc.font('Helvetica-Bold').fontSize(11)
+    const headerTextY = y + (rowHeight - 11) / 2 // Center text vertically in row
+
+    doc.text('ACTIVITY', tableLeft + 6, headerTextY, {
+      width: colActivity - 12,
+      align: 'center',
+      height: 11
     })
-    doc.text('SIGNATURE', tableLeft + colActivity + colDate + colParentPresent + 6, y + 6, { width: colSignature - 12 })
+    doc.text('DATE', tableLeft + colActivity + 6, headerTextY, {
+      width: colDate - 12,
+      align: 'center',
+      height: 11
+    })
+    doc.text('SIGNATURE', tableLeft + colActivity + colDate + 6, headerTextY, {
+      width: colSignature - 12,
+      align: 'center',
+      height: 11
+    })
+
     y += rowHeight
     doc.font('Helvetica').fontSize(10)
 
+    // Draw activity rows or blank rows if no activities
     if (!groups.length) {
+      // Draw 8 blank rows for activities
       const blankRows = 8
       for (let i = 0; i < blankRows; i++) {
         if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 60) {
           doc.addPage()
           y = doc.y + 6
         }
+
+        // Draw row border
         doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
+
+        // Draw vertical separators
+        doc
+          .moveTo(tableLeft + colActivity, y)
+          .lineTo(tableLeft + colActivity, y + rowHeight)
+          .stroke()
+        doc
+          .moveTo(tableLeft + colActivity + colDate, y)
+          .lineTo(tableLeft + colActivity + colDate, y + rowHeight)
+          .stroke()
+
         y += rowHeight
       }
     } else {
+      // Draw activities
       for (const grp of groups) {
-        /* if (y + 18 > doc.page.height - doc.page.margins.bottom - 60) {
-          doc.addPage()
-          y = doc.y + 6
-        }
-        doc.font('Helvetica-Bold').fontSize(10)
-        doc.text(grp.dateLabel || grp.dateKey || 'No date', tableLeft, y, { width: tableWidth })
-        y += 16
-        doc.font('Helvetica').fontSize(10) */
-
         for (const act of grp.activities) {
           if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 60) {
             doc.addPage()
             y = doc.y + 6
           }
-          doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
-          doc.text(act.title || '', tableLeft + 6, y + 6, { width: colActivity - 12, height: rowHeight - 6 })
-          const dateStr = act.date ? new Date(act.date).toLocaleDateString() : ''
-          doc.text(dateStr, tableLeft + colActivity + 6, y + 6, { width: colDate - 12 })
 
-          const boxSize = 12
-          const boxX = tableLeft + colActivity + colDate + Math.round((colParentPresent - boxSize) / 2)
-          const boxY = y + Math.round((rowHeight - boxSize) / 2)
-          doc.rect(boxX, boxY, boxSize, boxSize).stroke()
-          if (act.parent_present) {
-            doc
-              .moveTo(boxX + 2, boxY + 2)
-              .lineTo(boxX + boxSize - 2, boxY + boxSize - 2)
-              .stroke()
-            doc
-              .moveTo(boxX + boxSize - 2, boxY + 2)
-              .lineTo(boxX + 2, boxY + boxSize - 2)
-              .stroke()
-          }
+          // Draw row border
+          doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
+
+          // Draw vertical separators
+          doc
+            .moveTo(tableLeft + colActivity, y)
+            .lineTo(tableLeft + colActivity, y + rowHeight)
+            .stroke()
+          doc
+            .moveTo(tableLeft + colActivity + colDate, y)
+            .lineTo(tableLeft + colActivity + colDate, y + rowHeight)
+            .stroke()
+
+          // Activity text with proper vertical centering
+          const textY = y + (rowHeight - 10) / 2
+          doc.text(act.title || '', tableLeft + 6, textY, {
+            width: colActivity - 12,
+            height: rowHeight - 6,
+            align: 'left'
+          })
+
+          // Date text with proper vertical centering
+          const dateStr = act.date ? new Date(act.date).toLocaleDateString() : ''
+          doc.text(dateStr, tableLeft + colActivity + 6, textY, {
+            width: colDate - 12,
+            align: 'center'
+          })
+
+          // Signature column left blank for manual signing
+
           y += rowHeight
         }
-        y += 6
       }
     }
 
@@ -352,23 +380,25 @@ export default async function handler(req, res) {
       doc.addPage()
       y = doc.y + 6
     }
-    const footerY = y + 16
+    const footerY = y + 20
     const mid = tableLeft + tableWidth / 2
 
+    doc.font('Helvetica').fontSize(10)
     doc.text('Prepared By:', tableLeft, footerY)
     doc
-      .moveTo(tableLeft + 80, footerY + 12)
-      .lineTo(mid - 12, footerY + 12)
+      .moveTo(tableLeft + 80, footerY + 15)
+      .lineTo(mid - 12, footerY + 15)
       .lineWidth(0.4)
       .stroke()
-    doc.text('HRPTA Secretary', tableLeft + 80, footerY + 16)
+    doc.text('HRPTA Secretary', tableLeft + 80, footerY + 20, { align: 'center', width: mid - 12 - (tableLeft + 80) })
 
     doc.text('Approved By:', mid + 12, footerY)
     doc
-      .moveTo(mid + 100, footerY + 12)
-      .lineTo(right, footerY + 12)
+      .moveTo(mid + 100, footerY + 15)
+      .lineTo(right, footerY + 15)
       .lineWidth(0.4)
       .stroke()
+    doc.text('Principal', mid + 100, footerY + 20, { align: 'center', width: right - (mid + 100) })
 
     doc.end()
   } catch (err) {

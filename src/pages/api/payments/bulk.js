@@ -1,7 +1,7 @@
 // pages/api/payments/bulk.js
 import { getServerSession } from 'next-auth/next'
-import { authOptions } from '../../auth/[...nextauth]'
-import db from '../../db' // adjust path
+import { authOptions } from '../auth/[...nextauth]'
+import db from '../db' // adjust path
 
 /**
  * POST /api/payments/bulk

@@ -4,7 +4,8 @@ import { authOptions } from '../auth/[...nextauth]' // adjust path if your NextA
 import db from '../db' // adjust path to your DB helper
 
 /**
- * GET /api/summary?view=overview|byGrade|bySection|byActivity&grade_id=&section_id=&activity_id=&from_date=&to_date=
+ * GET /api/summary?view=overview|byGrade|bySection|byActivity|paymentsByGrade|paymentsBySection
+ * grade_id=&section_id=&activity_id=&from_date=&to_date=
  *
  * Only admins allowed.
  *
@@ -275,6 +276,66 @@ export default async function handler(req, res) {
         attendance_by_section: attGroups,
         payments_by_section: payGroups
       })
+    }
+
+    // ---------- PAYMENTS BY GRADE ----------
+    // GET /api/summary?view=paymentsByGrade&from_date=&to_date=&grade_id(optional)=
+    if (view === 'paymentsByGrade') {
+      // optional grade_id filter - if supplied, restrict to that grade
+      const gradeFilter = grade_id ? 'AND aa.grade_id = ?' : ''
+
+      // params: if grade_id present, include it as first param, then dateParams
+      const params = grade_id ? [grade_id, ...dateParams] : [...dateParams]
+
+      const [rows] = await db.query(
+        `
+        SELECT
+          aa.grade_id,
+          g.name AS grade_name,
+          SUM(p.paid = 1) AS paid_count,
+          SUM(p.paid = 0) AS unpaid_count
+        FROM payments p
+        JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
+        JOIN activities a ON a.id = aa.activity_id
+        JOIN grades g ON g.id = aa.grade_id
+        WHERE a.is_deleted = 0 ${dateWhere} ${gradeFilter}
+        GROUP BY aa.grade_id, g.name
+        ORDER BY aa.grade_id
+        `,
+        params
+      )
+
+      return res.status(200).json({ payments_by_grade: rows ?? [] })
+    }
+
+    // ---------- PAYMENTS BY SECTION ----------
+    // GET /api/summary?view=paymentsBySection&grade_id=&from_date=&to_date=
+    if (view === 'paymentsBySection') {
+      if (!grade_id) {
+        return res.status(400).json({ message: 'grade_id is required for view=paymentsBySection' })
+      }
+
+      const params = [grade_id, ...dateParams]
+
+      const [rows] = await db.query(
+        `
+        SELECT
+          aa.section_id,
+          s.name AS section_name,
+          SUM(p.paid = 1) AS paid_count,
+          SUM(p.paid = 0) AS unpaid_count
+        FROM payments p
+        JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
+        JOIN activities a ON a.id = aa.activity_id
+        JOIN sections s ON s.id = aa.section_id
+        WHERE a.is_deleted = 0 AND aa.grade_id = ? ${dateWhere}
+        GROUP BY aa.section_id, s.name
+        ORDER BY s.name
+        `,
+        params
+      )
+
+      return res.status(200).json({ payments_by_section: rows ?? [] })
     }
 
     // unknown view

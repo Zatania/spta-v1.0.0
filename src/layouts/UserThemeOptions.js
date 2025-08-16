@@ -12,15 +12,40 @@ const UserThemeOptions = () => {
   // ** To use core palette, uncomment the below line
   // const palette = corePalette(mode as PaletteMode, skin, themeColor)
   return {
-    /*
-    palette:{
+    palette: {
       primary: {
-        light: '#9E69FD',
-        main: '#9155FD',
-        dark: '#804BDF',
+        light: '#44BC65',
+        main: '#169044',
+        dark: '#107B43',
+        contrastText: '#FFF'
+      },
+      success: {
+        light: '#43D57D',
+        main: '#10BA65',
+        dark: '#0B9F64',
+        contrastText: '#FFF'
+      },
+      error: {
+        light: '#ED6078',
+        main: '#E22F5F',
+        dark: '#C2225C',
+        contrastText: '#FFF'
+      },
+      warning: {
+        light: '#F8BE3E',
+        main: '#F49F00',
+        dark: '#D18100',
+        contrastText: '#FFF'
+      },
+      info: {
+        light: '#4985EA',
+        main: '#1357DD',
+        dark: '#0D43BE',
         contrastText: '#FFF'
       }
-    },
+    }
+
+    /*
     breakpoints: {
       values: {
         xs: 0,

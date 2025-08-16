@@ -54,7 +54,8 @@ export default async function handler(req, res) {
       SELECT st.id, st.lrn, st.first_name, st.last_name, st.grade_id, st.section_id,
         at.id AS attendance_id, at.status AS attendance_status, at.parent_present AS parent_present,
         at.marked_by AS attendance_marked_by, at.marked_at AS attendance_marked_at,
-        pmt.id AS payment_id, pmt.paid AS payment_paid, pmt.payment_date AS payment_date, pmt.marked_by AS payment_marked_by
+        pmt.id AS payment_id, pmt.paid AS payment_paid, DATE_FORMAT(pmt.payment_date, '%Y-%m-%d') AS payment_date,
+        pmt.marked_by AS payment_marked_by
       FROM students st
       LEFT JOIN attendance at ON at.activity_assignment_id = ? AND at.student_id = st.id
       LEFT JOIN payments pmt ON pmt.activity_assignment_id = ? AND pmt.student_id = st.id

@@ -1,5 +1,5 @@
 // pages/attendance.js
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Box,
   Button,
@@ -11,20 +11,16 @@ import {
   DialogActions,
   Checkbox,
   FormControlLabel,
-  Table,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableBody,
   Stack,
   IconButton,
-  Tooltip
+  Tooltip,
+  Typography
 } from '@mui/material'
 import { DataGrid } from '@mui/x-data-grid'
 import axios from 'axios'
 import { useSession } from 'next-auth/react'
-import debounce from 'lodash.debounce'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import dayjs from 'dayjs'
 
 export default function AttendancePage() {
   const { data: session } = useSession()
@@ -33,7 +29,6 @@ export default function AttendancePage() {
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(25)
   const [total, setTotal] = useState(0)
-  const [search, setSearch] = useState('')
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [activeAssignment, setActiveAssignment] = useState(null)
@@ -50,7 +45,6 @@ export default function AttendancePage() {
     setLoading(true)
     try {
       const params = {
-        search: opts.search ?? search,
         page: (opts.page ?? page) + 1,
         page_size: opts.pageSize ?? pageSize
       }
@@ -65,20 +59,6 @@ export default function AttendancePage() {
     } finally {
       setLoading(false)
     }
-  }
-
-  const debouncedSearch = useCallback(
-    debounce(v => {
-      setPage(0)
-      fetchAssignments({ search: v, page: 0 })
-    }, 400),
-    []
-  )
-
-  const onSearchChange = e => {
-    const v = e.target.value
-    setSearch(v)
-    debouncedSearch(v)
   }
 
   // open assignment modal
@@ -104,13 +84,9 @@ export default function AttendancePage() {
     }
   }
 
-  const handleAttendanceChange = (idx, field, value) => {
-    setStudents(prev => {
-      const next = [...prev]
-      next[idx] = { ...next[idx], [field]: value }
-
-      return next
-    })
+  // update by student id
+  const handleAttendanceChange = (studentId, field, value) => {
+    setStudents(prev => prev.map(s => (s.id === studentId ? { ...s, [field]: value } : s)))
   }
 
   const saveAttendance = async () => {
@@ -176,14 +152,103 @@ export default function AttendancePage() {
   }
 
   const columns = [
-    { field: 'id', headerName: 'ID', width: 80 },
+    { field: 'lrn', headerName: 'LRN', width: 110 },
+    { field: 'last_name', headerName: 'Last name', width: 160 },
+    { field: 'first_name', headerName: 'First name', width: 160 },
+    {
+      field: 'parent_present',
+      headerName: 'Parent Present',
+      width: 140,
+      sortable: false,
+      filterable: false,
+      renderCell: params => {
+        return (
+          <Checkbox
+            checked={!!params.value}
+            onChange={e => handleAttendanceChange(params.row.id, 'parent_present', e.target.checked)}
+            inputProps={{ 'aria-label': 'parent present' }}
+          />
+        )
+      }
+    },
+    {
+      field: 'attendance_state',
+      headerName: 'Attendance Status',
+      width: 180,
+      sortable: false,
+      filterable: false,
+      renderCell: params => {
+        const val = params.value || 'absent'
+        const bg = val === 'present' ? '#e8f5e9' : '#ffebee'
+
+        return (
+          <Box sx={{ width: '100%' }}>
+            <TextField
+              select
+              size='small'
+              value={val}
+              onChange={e => handleAttendanceChange(params.row.id, 'attendance_state', e.target.value)}
+              sx={{ minWidth: 140, backgroundColor: bg, borderRadius: 1 }}
+            >
+              <MenuItem value='present'>Present</MenuItem>
+              <MenuItem value='absent'>Absent</MenuItem>
+            </TextField>
+          </Box>
+        )
+      }
+    },
+    {
+      field: 'payment_paid',
+      headerName: 'Payment',
+      width: 110,
+      sortable: false,
+      filterable: false,
+      renderCell: params => (
+        <Checkbox
+          checked={!!params.value}
+          onChange={e => handleAttendanceChange(params.row.id, 'payment_paid', e.target.checked)}
+          inputProps={{ 'aria-label': 'payment paid' }}
+        />
+      )
+    },
+    {
+      field: 'payment_date',
+      headerName: 'Payment Date',
+      width: 160,
+      renderCell: params => {
+        const raw = params.value ?? ''
+
+        // ensure ISO date for input value
+        const value = raw ? dayjs(raw).format('YYYY-MM-DD') : ''
+
+        return (
+          <TextField
+            type='date'
+            size='small'
+            value={value}
+            onChange={e => handleAttendanceChange(params.row.id, 'payment_date', e.target.value || null)}
+            InputLabelProps={{ shrink: true }}
+          />
+        )
+      }
+    }
+  ]
+
+  // assignments grid columns for the main page
+  const assignmentColumns = [
     {
       field: 'title',
       headerName: 'Activity',
       flex: 1,
+      width: 250,
       valueGetter: params => params.row.title || params.row.activity_title
     },
-    { field: 'activity_date', headerName: 'Date', width: 120 },
+    {
+      field: 'activity_date',
+      headerName: 'Date',
+      width: 120,
+      valueGetter: p => (p.row.activity_date ? dayjs(p.row.activity_date).format('YYYY-MM-DD') : '')
+    },
     { field: 'grade_name', headerName: 'Grade', width: 120 },
     { field: 'section_name', headerName: 'Section', width: 140 },
     {
@@ -204,24 +269,15 @@ export default function AttendancePage() {
 
   return (
     <Box p={3}>
-      <Box display='flex' alignItems='center' gap={2} mb={2}>
-        <TextField
-          size='small'
-          placeholder='Search activity title...'
-          value={search}
-          onChange={onSearchChange}
-          sx={{ minWidth: 320 }}
-        />
-        <Box sx={{ flexGrow: 1 }} />
-        <Button variant='contained' onClick={() => (window.location.href = '/activities')}>
-          Manage Activities
-        </Button>
+      {/* Header title for the page */}
+      <Box display='flex' alignItems='center' mb={2}>
+        <Typography variant='h5'>Attendance</Typography>
       </Box>
 
       <div style={{ height: 600, width: '100%' }}>
         <DataGrid
           rows={assignments}
-          columns={columns}
+          columns={assignmentColumns}
           pageSize={pageSize}
           rowCount={total}
           paginationMode='server'
@@ -247,90 +303,29 @@ export default function AttendancePage() {
             : ''}
         </DialogTitle>
         <DialogContent>
-          <Box mb={2} display='flex' gap={2}>
+          <Box mb={2} display='flex' gap={2} alignItems='center'>
             <Button variant='contained' color='primary' onClick={saveAttendance} disabled={savingAttendance}>
               {savingAttendance ? 'Saving...' : 'Save Attendance'}
             </Button>
             <Button variant='contained' color='success' onClick={savePayments} disabled={savingPayments}>
               {savingPayments ? 'Saving...' : 'Save Payments'}
             </Button>
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant='caption'>Rows: {students.length}</Typography>
           </Box>
 
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>LRN</TableCell>
-                <TableCell>Last name</TableCell>
-                <TableCell>First name</TableCell>
-                <TableCell>Parent Present</TableCell>
-                <TableCell>Attendance Status</TableCell>
-                <TableCell>Payment</TableCell>
-                <TableCell>Payment Date</TableCell>
-              </TableRow>
-            </TableHead>
-
-            <TableBody>
-              {students.map((s, idx) => (
-                <TableRow key={s.id}>
-                  <TableCell>{s.lrn}</TableCell>
-                  <TableCell>{s.last_name}</TableCell>
-                  <TableCell>{s.first_name}</TableCell>
-                  <TableCell>
-                    <FormControlLabel
-                      control={
-                        <Checkbox
-                          checked={!!s.parent_present}
-                          onChange={e => handleAttendanceChange(idx, 'parent_present', e.target.checked)}
-                        />
-                      }
-                      label=''
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <TextField
-                      select
-                      size='small'
-                      value={s.attendance_state}
-                      onChange={e => handleAttendanceChange(idx, 'attendance_state', e.target.value)}
-                      sx={{
-                        minWidth: 140,
-
-                        // color coding via background
-                        ...(s.attendance_state === 'present'
-                          ? { backgroundColor: '#e8f5e9' }
-                          : { backgroundColor: '#ffebee' })
-                      }}
-                    >
-                      <MenuItem value='present'>Present</MenuItem>
-                      <MenuItem value='absent'>Absent</MenuItem>
-                    </TextField>
-                  </TableCell>
-
-                  <TableCell>
-                    <FormControlLabel
-                      control={
-                        <Checkbox
-                          checked={!!s.payment_paid}
-                          onChange={e => handleAttendanceChange(idx, 'payment_paid', e.target.checked)}
-                        />
-                      }
-                      label=''
-                    />
-                  </TableCell>
-
-                  <TableCell>
-                    <TextField
-                      type='date'
-                      size='small'
-                      value={s.payment_date ?? ''}
-                      onChange={e => handleAttendanceChange(idx, 'payment_date', e.target.value)}
-                      InputLabelProps={{ shrink: true }}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <div style={{ height: 560, width: '100%' }}>
+            <DataGrid
+              rows={students}
+              columns={columns}
+              getRowId={r => r.id}
+              disableSelectionOnClick
+              hideFooterSelectedRowCount
+              initialState={{ pagination: { pageSize: 25 } }}
+              pageSizeOptions={[10, 25, 50]}
+              experimentalFeatures={{ newEditingApi: true }}
+            />
+          </div>
         </DialogContent>
 
         <DialogActions>

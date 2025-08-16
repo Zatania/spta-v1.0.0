@@ -58,7 +58,7 @@ export default async function handler(req, res) {
         JOIN grades g ON g.id = aa.grade_id
         JOIN sections s ON s.id = aa.section_id
         ${whereSql}
-        ORDER BY a.activity_date DESC, a.title
+        ORDER BY a.activity_date ASC
         LIMIT ? OFFSET ?
       `
       const finalParams = [...params, limit, offset]

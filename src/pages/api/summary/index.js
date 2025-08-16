@@ -3,15 +3,6 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]' // adjust path if your NextAuth file is elsewhere
 import db from '../db' // adjust path to your DB helper
 
-/**
- * GET /api/summary?view=overview|byGrade|bySection|byActivity|paymentsByGrade|paymentsBySection
- * grade_id=&section_id=&activity_id=&from_date=&to_date=
- *
- * Only admins allowed.
- *
- * NOTE: db.query(...) is expected to be mysql2/promise style returning [rows, fields].
- */
-
 const isValidDate = d => {
   if (!d) return false
   const n = new Date(d)
@@ -20,12 +11,10 @@ const isValidDate = d => {
 }
 
 export default async function handler(req, res) {
-  // only GET
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method Not Allowed. Use GET.' })
   }
 
-  // require admin
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user || session.user.role !== 'admin') {
@@ -46,29 +35,34 @@ export default async function handler(req, res) {
     to_date = null
   } = req.query
 
-  // build date filter for activity date when needed
-  const dateFilters = []
+  // build date filters both with and without alias `a.`
   const dateParams = []
+  const dateFiltersA = [] // uses alias a.activity_date (for queries that alias activities as `a`)
+  const dateFiltersNoAlias = [] // uses activity_date (for queries that reference activities table without alias)
+
   if (isValidDate(from_date)) {
-    dateFilters.push('a.activity_date >= ?')
+    dateFiltersA.push('a.activity_date >= ?')
+    dateFiltersNoAlias.push('activity_date >= ?')
     dateParams.push(from_date)
   }
   if (isValidDate(to_date)) {
-    dateFilters.push('a.activity_date <= ?')
+    dateFiltersA.push('a.activity_date <= ?')
+    dateFiltersNoAlias.push('activity_date <= ?')
     dateParams.push(to_date)
   }
-  const dateWhere = dateFilters.length ? `AND ${dateFilters.join(' AND ')}` : ''
+
+  const dateWhereA = dateFiltersA.length ? `AND ${dateFiltersA.join(' AND ')}` : ''
+  const dateWhereNoAlias = dateFiltersNoAlias.length ? `AND ${dateFiltersNoAlias.join(' AND ')}` : ''
 
   try {
     // ---------- OVERVIEW ----------
     if (view === 'overview') {
       const [studentsRows] = await db.query(`SELECT COUNT(*) AS total_students FROM students WHERE is_deleted = 0`)
 
+      // use dateWhereNoAlias because we reference activities without alias here
       const [[activitiesRow]] = await db.query(
-        `SELECT COUNT(*) AS total_activities FROM activities WHERE is_deleted = 0 ${
-          dateFilters.length ? 'AND activity_date BETWEEN ? AND ?' : ''
-        }`,
-        dateParams.length === 2 ? [dateParams[0], dateParams[1]] : []
+        `SELECT COUNT(*) AS total_activities FROM activities WHERE is_deleted = 0 ${dateWhereNoAlias}`,
+        dateParams
       )
 
       // attendance totals (present/absent) across activities in date range
@@ -81,7 +75,7 @@ export default async function handler(req, res) {
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
-        WHERE a.is_deleted = 0 ${dateWhere}
+        WHERE a.is_deleted = 0 ${dateWhereA}
         `,
         dateParams
       )
@@ -95,7 +89,7 @@ export default async function handler(req, res) {
         FROM payments p
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
-        WHERE a.is_deleted = 0 ${dateWhere}
+        WHERE a.is_deleted = 0 ${dateWhereA}
         `,
         dateParams
       )
@@ -108,13 +102,11 @@ export default async function handler(req, res) {
       })
     }
 
-    // ---------- BY GRADE (students per grade, sections) ----------
+    // ---------- BY GRADE ----------
     if (view === 'byGrade') {
-      // If grade_id provided, filter; else produce for all grades
       const gradeFilter = grade_id ? 'WHERE g.id = ?' : ''
       const gradeParams = grade_id ? [grade_id] : []
 
-      // total students grouped by grade + section
       const [rows] = await db.query(
         `
         SELECT
@@ -133,7 +125,6 @@ export default async function handler(req, res) {
         gradeParams
       )
 
-      // restructure into nested result per grade
       const gradeMap = {}
       for (const r of rows) {
         const gid = r.grade_id
@@ -141,7 +132,6 @@ export default async function handler(req, res) {
           gradeMap[gid] = { grade_id: gid, grade_name: r.grade_name, sections: [] }
         }
 
-        // section could be null (no sections); handle
         gradeMap[gid].sections.push({
           section_id: r.section_id,
           section_name: r.section_name,
@@ -152,13 +142,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ grades: Object.values(gradeMap) })
     }
 
-    // ---------- BY SECTION (activities, attendance, payments for a section) ----------
+    // ---------- BY SECTION ----------
     if (view === 'bySection') {
       if (!section_id) {
         return res.status(400).json({ message: 'section_id is required for view=bySection' })
       }
 
-      // activity list assigned to this section (and optionally date filter)
       const [activities] = await db.query(
         `
         SELECT
@@ -167,14 +156,13 @@ export default async function handler(req, res) {
           a.activity_date
         FROM activities a
         JOIN activity_assignments aa ON aa.activity_id = a.id
-        WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhere}
+        WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhereA}
         GROUP BY a.id
         ORDER BY a.activity_date DESC
         `,
         [section_id, ...dateParams]
       )
 
-      // for each activity compute attendance & payment summary for this section
       const activitySummaries = []
       for (const act of activities) {
         const [attRows] = await db.query(
@@ -211,7 +199,6 @@ export default async function handler(req, res) {
         })
       }
 
-      // total students in this section
       const [[studentRow]] = await db.query(
         `SELECT COUNT(*) AS total_students FROM students WHERE section_id = ? AND is_deleted = 0`,
         [section_id]
@@ -224,13 +211,12 @@ export default async function handler(req, res) {
       })
     }
 
-    // ---------- BY ACTIVITY (attendance & payments grouped by section/grade) ----------
+    // ---------- BY ACTIVITY ----------
     if (view === 'byActivity') {
       if (!activity_id) {
         return res.status(400).json({ message: 'activity_id is required for view=byActivity' })
       }
 
-      // attendance grouped by grade+section
       const [attGroups] = await db.query(
         `
         SELECT
@@ -251,7 +237,6 @@ export default async function handler(req, res) {
         [activity_id]
       )
 
-      // payments grouped by grade+section
       const [payGroups] = await db.query(
         `
         SELECT
@@ -279,12 +264,8 @@ export default async function handler(req, res) {
     }
 
     // ---------- PAYMENTS BY GRADE ----------
-    // GET /api/summary?view=paymentsByGrade&from_date=&to_date=&grade_id(optional)=
     if (view === 'paymentsByGrade') {
-      // optional grade_id filter - if supplied, restrict to that grade
       const gradeFilter = grade_id ? 'AND aa.grade_id = ?' : ''
-
-      // params: if grade_id present, include it as first param, then dateParams
       const params = grade_id ? [grade_id, ...dateParams] : [...dateParams]
 
       const [rows] = await db.query(
@@ -298,7 +279,7 @@ export default async function handler(req, res) {
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
         JOIN grades g ON g.id = aa.grade_id
-        WHERE a.is_deleted = 0 ${dateWhere} ${gradeFilter}
+        WHERE a.is_deleted = 0 ${dateWhereA} ${gradeFilter}
         GROUP BY aa.grade_id, g.name
         ORDER BY aa.grade_id
         `,
@@ -309,7 +290,6 @@ export default async function handler(req, res) {
     }
 
     // ---------- PAYMENTS BY SECTION ----------
-    // GET /api/summary?view=paymentsBySection&grade_id=&from_date=&to_date=
     if (view === 'paymentsBySection') {
       if (!grade_id) {
         return res.status(400).json({ message: 'grade_id is required for view=paymentsBySection' })
@@ -328,7 +308,7 @@ export default async function handler(req, res) {
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
         JOIN sections s ON s.id = aa.section_id
-        WHERE a.is_deleted = 0 AND aa.grade_id = ? ${dateWhere}
+        WHERE a.is_deleted = 0 AND aa.grade_id = ? ${dateWhereA}
         GROUP BY aa.section_id, s.name
         ORDER BY s.name
         `,
@@ -338,7 +318,6 @@ export default async function handler(req, res) {
       return res.status(200).json({ payments_by_section: rows ?? [] })
     }
 
-    // unknown view
     return res.status(400).json({ message: 'Invalid view parameter' })
   } catch (err) {
     console.error('Summary API error:', err)

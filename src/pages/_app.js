@@ -91,7 +91,7 @@ const App = props => {
   return (
     <CacheProvider value={emotionCache}>
       <Head>
-        <title>{`${themeConfig.templateName} - SPTA Monitoring SystemS`}</title>
+        <title>{`${themeConfig.templateName} - SPTA Monitoring System`}</title>
         <meta
           name='description'
           content={`${themeConfig.templateName} - SPTA Monitoring System - is a straightforward monitoring system for bayugan city elementary school.`}

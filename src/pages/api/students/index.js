@@ -2,6 +2,16 @@
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]'
 import db from '../db'
+import formidable from 'formidable'
+import fs from 'fs'
+import path from 'path'
+
+// Disable body parser for file uploads
+export const config = {
+  api: {
+    bodyParser: false
+  }
+}
 
 export default async function handler(req, res) {
   try {
@@ -30,8 +40,10 @@ export default async function handler(req, res) {
         params.push(lrn)
       }
       if (search) {
-        where.push('(st.first_name LIKE ? OR st.last_name LIKE ? OR CONCAT(st.first_name," ",st.last_name) LIKE ?)')
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`)
+        where.push(
+          '(st.first_name LIKE ? OR st.last_name LIKE ? OR CONCAT(st.first_name," ",st.last_name) LIKE ? OR st.lrn LIKE ?)'
+        )
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
       }
 
       // If teacher, restrict to their sections
@@ -47,10 +59,16 @@ export default async function handler(req, res) {
       const total = countRows[0]?.total ?? 0
 
       const sql = `
-        SELECT st.id, st.first_name, st.last_name, st.lrn, st.grade_id, st.section_id, g.name AS grade_name, s.name AS section_name
+        SELECT
+          st.id, st.first_name, st.last_name, st.lrn, st.grade_id, st.section_id, st.picture_url,
+          g.name AS grade_name,
+          s.name AS section_name,
+          u.full_name AS teacher_name
         FROM students st
         LEFT JOIN grades g ON g.id = st.grade_id
         LEFT JOIN sections s ON s.id = st.section_id
+        LEFT JOIN teacher_sections ts ON ts.section_id = st.section_id
+        LEFT JOIN users u ON u.id = ts.user_id
         ${whereSql}
         ORDER BY st.last_name, st.first_name
         LIMIT ? OFFSET ?
@@ -62,10 +80,48 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      // create student with parents
-      const { first_name, last_name, lrn, grade_id, section_id, parents = [] } = req.body
+      // Parse form data with file upload
+      const form = formidable({
+        uploadDir: path.join(process.cwd(), 'public/uploads/students'),
+        keepExtensions: true,
+        maxFileSize: 5 * 1024 * 1024, // 5MB
+        multiples: false
+      })
+
+      // Ensure upload directory exists
+      const uploadDir = path.join(process.cwd(), 'public/uploads/students')
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true })
+      }
+
+      const [fields, files] = await new Promise((resolve, reject) => {
+        form.parse(req, (err, fields, files) => {
+          if (err) reject(err)
+          else resolve([fields, files])
+        })
+      })
+
+      const first_name = Array.isArray(fields.first_name) ? fields.first_name[0] : fields.first_name
+      const last_name = Array.isArray(fields.last_name) ? fields.last_name[0] : fields.last_name
+      const lrn = Array.isArray(fields.lrn) ? fields.lrn[0] : fields.lrn
+      const grade_id = Array.isArray(fields.grade_id) ? fields.grade_id[0] : fields.grade_id
+      const section_id = Array.isArray(fields.section_id) ? fields.section_id[0] : fields.section_id
+      const teacher_id = Array.isArray(fields.teacher_id) ? fields.teacher_id[0] : fields.teacher_id
+      const parent_id = Array.isArray(fields.parent_id) ? fields.parent_id[0] : fields.parent_id
+
       if (!first_name || !last_name || !lrn || !grade_id || !section_id) {
         return res.status(400).json({ message: 'Missing required fields' })
+      }
+
+      // Require picture for new students
+      const pictureFile = Array.isArray(files.picture) ? files.picture[0] : files.picture
+      if (!pictureFile) {
+        return res.status(400).json({ message: 'Student picture is required' })
+      }
+
+      // Validate image file
+      if (!pictureFile.mimetype?.startsWith('image/')) {
+        return res.status(400).json({ message: 'Please upload a valid image file' })
       }
 
       // verify section exists & grade match
@@ -94,36 +150,31 @@ export default async function handler(req, res) {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
+        // Generate unique filename
+        const fileExt = path.extname(pictureFile.originalFilename || pictureFile.newFilename)
+        const uniqueFilename = `${Date.now()}-${Math.random().toString(36).substring(2)}${fileExt}`
+        const finalPath = path.join(uploadDir, uniqueFilename)
+
+        // Move file to final location
+        fs.renameSync(pictureFile.filepath, finalPath)
+
+        const picture_url = `/uploads/students/${uniqueFilename}`
+
         const [ins] = await conn.query(
-          'INSERT INTO students (first_name, last_name, lrn, grade_id, section_id, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())',
-          [first_name, last_name, lrn, grade_id, section_id]
+          'INSERT INTO students (first_name, last_name, lrn, grade_id, section_id, picture_url, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, NOW(), NOW())',
+          [first_name, last_name, lrn, grade_id, section_id, picture_url]
         )
         const studentId = ins.insertId
 
-        // handle parents array (if parent.id exists use it, else create)
-        for (const p of parents) {
-          if (p.id) {
-            // ensure parent exists and not deleted
-            const [prow] = await conn.query('SELECT id FROM parents WHERE id = ? AND is_deleted = 0 LIMIT 1', [p.id])
-            if (!prow.length) {
-              await conn.rollback()
-
-              return res.status(400).json({ message: `Parent id ${p.id} not found` })
-            }
-            await conn.query('INSERT IGNORE INTO student_parents (student_id, parent_id, relation) VALUES (?, ?, ?)', [
+        // Handle parent assignment if provided
+        if (parent_id) {
+          const [parentCheck] = await conn.query('SELECT id FROM parents WHERE id = ? AND is_deleted = 0 LIMIT 1', [
+            parent_id
+          ])
+          if (parentCheck.length) {
+            await conn.query('INSERT INTO student_parents (student_id, parent_id) VALUES (?, ?)', [
               studentId,
-              p.id,
-              p.relation || null
-            ])
-          } else {
-            const [newP] = await conn.query(
-              'INSERT INTO parents (first_name, last_name, contact_info, is_deleted, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
-              [p.first_name, p.last_name, p.contact_info || null]
-            )
-            await conn.query('INSERT INTO student_parents (student_id, parent_id, relation) VALUES (?, ?, ?)', [
-              studentId,
-              newP.insertId,
-              p.relation || null
+              parent_id
             ])
           }
         }
@@ -137,6 +188,12 @@ export default async function handler(req, res) {
           await conn.rollback().catch(() => {})
           conn.release().catch(() => {})
         }
+
+        // Clean up uploaded file on error
+        if (pictureFile?.filepath && fs.existsSync(pictureFile.filepath)) {
+          fs.unlinkSync(pictureFile.filepath).catch(() => {})
+        }
+
         console.error('Create student error', err)
         if (err && err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Duplicate entry' })
 

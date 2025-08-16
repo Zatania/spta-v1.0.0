@@ -52,6 +52,7 @@
     "draft-js": "0.11.7",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
+    "formidable": "^3.5.4",
     "i18next": "22.4.15",
     "i18next-browser-languagedetector": "7.0.1",
     "i18next-http-backend": "2.2.0",

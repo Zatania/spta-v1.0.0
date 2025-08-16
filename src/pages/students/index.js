@@ -13,12 +13,21 @@ import {
   IconButton,
   Tooltip,
   InputAdornment,
-  Stack
+  Stack,
+  Avatar,
+  Typography,
+  FormControl,
+  InputLabel,
+  Select,
+  Divider,
+  Alert
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
+import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import axios from 'axios'
 import { DataGrid } from '@mui/x-data-grid'
 import debounce from 'lodash.debounce'
@@ -29,6 +38,8 @@ export default function StudentsPage() {
   const [students, setStudents] = useState([])
   const [grades, setGrades] = useState([])
   const [sectionsAll, setSectionsAll] = useState([])
+  const [teachers, setTeachers] = useState([])
+  const [parents, setParents] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
 
@@ -44,16 +55,42 @@ export default function StudentsPage() {
 
   // dialog (add/edit)
   const [open, setOpen] = useState(false)
-  const emptyForm = { id: null, first_name: '', last_name: '', lrn: '', grade_id: '', section_id: '', parents: [] }
+  const [isEditing, setIsEditing] = useState(false) // Track if we're editing vs creating
+
+  const emptyForm = {
+    id: null,
+    first_name: '',
+    last_name: '',
+    lrn: '',
+    grade_id: '',
+    section_id: '',
+    teacher_id: '',
+    parent_id: '',
+    picture: null,
+    picture_preview: null
+  }
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
+
+  // parent dialog
+  const [parentDialogOpen, setParentDialogOpen] = useState(false)
+
+  const [parentForm, setParentForm] = useState({
+    first_name: '',
+    last_name: '',
+    contact_info: '',
+    relation: ''
+  })
+  const [savingParent, setSavingParent] = useState(false)
 
   // load user info and static lists
   useEffect(() => {
     fetchMyInfo()
     fetchGrades()
     fetchSectionsAll()
+    fetchTeachers()
+    fetchParents()
   }, [])
 
   useEffect(() => {
@@ -106,6 +143,26 @@ export default function StudentsPage() {
       )
     } catch (err) {
       console.error('Failed to load sections', err)
+    }
+  }
+
+  // Fetch teachers for assignment
+  const fetchTeachers = async () => {
+    try {
+      const res = await axios.get('/api/teachers/list')
+      setTeachers(res.data ?? [])
+    } catch (err) {
+      console.error('Failed to load teachers', err)
+    }
+  }
+
+  // Fetch all parents for dropdown
+  const fetchParents = async () => {
+    try {
+      const res = await axios.get('/api/parents')
+      setParents(res.data ?? [])
+    } catch (err) {
+      console.error('Failed to load parents', err)
     }
   }
 
@@ -214,8 +271,57 @@ export default function StudentsPage() {
     }
   }
 
+  // Handle image upload
+  const handleImageChange = event => {
+    const file = event.target.files[0]
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        alert('Please select an image file')
+
+        return
+      }
+
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('Image size should be less than 5MB')
+
+        return
+      }
+
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setForm(prev => ({
+          ...prev,
+          picture: file,
+          picture_preview: reader.result
+        }))
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  // Auto-select teacher based on grade and section (only for new students)
+  const autoSelectTeacher = (gradeId, sectionId, skipIfEditing = false) => {
+    if (!gradeId || !sectionId) return ''
+
+    // Skip auto-selection when editing existing student
+    if (skipIfEditing && isEditing) return form.teacher_id
+
+    // Find teacher assigned to this section
+    // Add safe access to assigned_sections
+    const teacher = teachers.find(t =>
+      t.assigned_sections?.some(
+        s => s && s.id && String(s.id) === String(sectionId) && s.grade_id && String(s.grade_id) === String(gradeId)
+      )
+    )
+
+    return teacher ? String(teacher.id) : ''
+  }
+
   // Open create/edit dialog
   const openCreate = () => {
+    setIsEditing(false)
     const newForm = { ...emptyForm }
 
     // If teacher with single assigned section, prefill and lock grade/section
@@ -223,12 +329,15 @@ export default function StudentsPage() {
       const a = me.teacher.assigned_sections[0]
       newForm.grade_id = String(a.grade_id)
       newForm.section_id = String(a.id)
+      newForm.teacher_id = String(me.user.id) // Auto-select current teacher
     }
+
     setForm(newForm)
     setOpen(true)
   }
 
   const openEdit = async row => {
+    setIsEditing(true)
     try {
       const res = await axios.get(`/api/students/${row.id}`)
       const stu = res.data
@@ -240,15 +349,12 @@ export default function StudentsPage() {
         lrn: stu.lrn,
         grade_id: String(stu.grade_id ?? ''),
         section_id: String(stu.section_id ?? ''),
-        parents: stu.parents ?? []
+        teacher_id: String(stu.teacher_id ?? ''),
+        parent_id: stu.parents?.[0]?.id ? String(stu.parents[0].id) : '',
+        picture: null,
+        picture_preview: stu.picture_url || null
       }
 
-      // If teacher with single assigned section, override form grade/section just in case
-      if (me?.teacher?.assigned_sections && me.teacher.assigned_sections.length === 1) {
-        const a = me.teacher.assigned_sections[0]
-        newForm.grade_id = String(a.grade_id)
-        newForm.section_id = String(a.id)
-      }
       setForm(newForm)
       setOpen(true)
     } catch (err) {
@@ -260,18 +366,45 @@ export default function StudentsPage() {
   const save = async () => {
     setSaving(true)
     try {
-      // For teachers with assigned section(s), enforce grade/section values in request
-      const payload = { ...form }
-      if (me?.teacher?.assigned_sections && me.teacher.assigned_sections.length === 1) {
-        const a = me.teacher.assigned_sections[0]
-        payload.grade_id = String(a.grade_id)
-        payload.section_id = String(a.id)
+      // Validate required fields
+      if (!form.first_name || !form.last_name || !form.lrn || !form.grade_id || !form.section_id) {
+        alert('Please fill in all required fields')
+        setSaving(false)
+
+        return
       }
+
+      // For new students, require image
+      if (!form.id && !form.picture) {
+        alert('Please upload a student picture')
+        setSaving(false)
+
+        return
+      }
+
+      const formData = new FormData()
+      formData.append('first_name', form.first_name)
+      formData.append('last_name', form.last_name)
+      formData.append('lrn', form.lrn)
+      formData.append('grade_id', form.grade_id)
+      formData.append('section_id', form.section_id)
+      formData.append('teacher_id', form.teacher_id)
+      formData.append('parent_id', form.parent_id)
+
+      if (form.picture) {
+        formData.append('picture', form.picture)
+      }
+
       if (form.id) {
-        await axios.put(`/api/students/${form.id}`, payload)
+        await axios.put(`/api/students/${form.id}`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
       } else {
-        await axios.post('/api/students', payload)
+        await axios.post('/api/students', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
       }
+
       setOpen(false)
       fetchStudents({ page: 0 })
       fetchSectionsAll()
@@ -294,21 +427,40 @@ export default function StudentsPage() {
     }
   }
 
-  // parents handlers
-  const addParentRow = () =>
-    setForm(prev => ({
-      ...prev,
-      parents: [...prev.parents, { first_name: '', last_name: '', contact_info: '', relation: '' }]
-    }))
+  // Parent creation
+  const saveParent = async () => {
+    setSavingParent(true)
+    try {
+      if (!parentForm.first_name || !parentForm.last_name) {
+        alert('Please fill in parent first name and last name')
+        setSavingParent(false)
 
-  const updateParent = (idx, key, value) =>
-    setForm(prev => {
-      const ps = [...prev.parents]
-      ps[idx] = { ...ps[idx], [key]: value }
+        return
+      }
 
-      return { ...prev, parents: ps }
-    })
-  const removeParentRow = idx => setForm(prev => ({ ...prev, parents: prev.parents.filter((_, i) => i !== idx) }))
+      const res = await axios.post('/api/parents', parentForm)
+      const newParentId = res.data.id
+
+      // Refresh parents list
+      await fetchParents()
+
+      // Auto-select the newly created parent
+      setForm(prev => ({ ...prev, parent_id: String(newParentId) }))
+
+      setParentDialogOpen(false)
+      setParentForm({
+        first_name: '',
+        last_name: '',
+        contact_info: '',
+        relation: ''
+      })
+    } catch (err) {
+      console.error('Failed to create parent', err)
+      alert(err?.response?.data?.message ?? 'Failed to create parent')
+    } finally {
+      setSavingParent(false)
+    }
+  }
 
   // Export (honor teacher filters)
   const exportStudents = async (format = 'csv') => {
@@ -338,11 +490,27 @@ export default function StudentsPage() {
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 80 },
+    {
+      field: 'picture',
+      headerName: 'Photo',
+      width: 80,
+      renderCell: params => (
+        <Avatar
+          src={params.row.picture_url}
+          alt={`${params.row.first_name} ${params.row.last_name}`}
+          sx={{ width: 40, height: 40 }}
+        >
+          {params.row.first_name?.[0]}
+          {params.row.last_name?.[0]}
+        </Avatar>
+      )
+    },
     { field: 'lrn', headerName: 'LRN', width: 140 },
     { field: 'last_name', headerName: 'Last name', flex: 1 },
     { field: 'first_name', headerName: 'First name', flex: 1 },
     { field: 'grade_name', headerName: 'Grade', width: 120 },
     { field: 'section_name', headerName: 'Section', width: 160 },
+    { field: 'teacher_name', headerName: 'Teacher', width: 160 },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -368,8 +536,41 @@ export default function StudentsPage() {
   const isTeacher = session?.user?.role === 'teacher'
   const teacherAssignedSections = me?.teacher?.assigned_sections ?? []
 
-  // If teacher has exactly 1 assigned section, show that grade/section as fixed (disabled)
-  const teacherHasSingleSection = isTeacher && teacherAssignedSections.length === 1
+  // If teacher has exactly 1 assigned section and is creating (not editing), show that grade/section as fixed
+  const shouldDisableGradeSection = isTeacher && teacherAssignedSections.length === 1 && !isEditing
+
+  // Get available sections based on selected grade and user role
+  const getAvailableSections = () => {
+    if (isTeacher && !isEditing) {
+      // For teachers creating new students, limit to assigned sections
+      return teacherAssignedSections.filter(s => !form.grade_id || String(s.grade_id) === String(form.grade_id))
+    } else {
+      // For admins or when editing, show all sections for the selected grade
+      return sectionsAll.filter(s => !form.grade_id || String(s.grade_id) === String(form.grade_id))
+    }
+  }
+
+  // Get available teachers based on selected grade and section
+  const getAvailableTeachers = () => {
+    if (!form.grade_id || !form.section_id) return teachers
+
+    return teachers.filter(t =>
+      t.assigned_sections?.some(
+        s => String(s.id) === String(form.section_id) && String(s.grade_id) === String(form.grade_id)
+      )
+    )
+  }
+
+  // Helper function to get teacher display name
+  const getTeacherDisplayName = teacher => {
+    return (
+      teacher.full_name ||
+      (teacher.first_name && teacher.last_name ? `${teacher.first_name} ${teacher.last_name}` : '') ||
+      teacher.username ||
+      teacher.name ||
+      `Teacher ${teacher.id}`
+    )
+  }
 
   return (
     <Box p={3}>
@@ -397,7 +598,7 @@ export default function StudentsPage() {
           value={gradeFilter}
           onChange={e => onGradeFilterChange(e.target.value)}
           sx={{ minWidth: 160 }}
-          disabled={teacherHasSingleSection}
+          disabled={isTeacher && teacherAssignedSections.length === 1}
         >
           <MenuItem value=''>All Grades</MenuItem>
           {grades.map(g => (
@@ -415,7 +616,7 @@ export default function StudentsPage() {
           value={sectionFilter}
           onChange={e => onSectionFilterChange(e.target.value)}
           sx={{ minWidth: 200 }}
-          disabled={teacherHasSingleSection}
+          disabled={isTeacher && teacherAssignedSections.length === 1}
         >
           <MenuItem value=''>All Sections</MenuItem>
 
@@ -477,36 +678,79 @@ export default function StudentsPage() {
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth='md'>
         <DialogTitle>{form.id ? 'Edit Student' : 'Add Student'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          {/* Student Picture Upload */}
+          <Box display='flex' alignItems='center' gap={2}>
+            <Avatar src={form.picture_preview} sx={{ width: 80, height: 80 }}>
+              {form.first_name?.[0]}
+              {form.last_name?.[0]}
+            </Avatar>
+            <Box>
+              <input
+                accept='image/*'
+                style={{ display: 'none' }}
+                id='picture-upload'
+                type='file'
+                onChange={handleImageChange}
+              />
+              <label htmlFor='picture-upload'>
+                <Button variant='outlined' component='span' startIcon={<PhotoCameraIcon />}>
+                  Upload Picture
+                </Button>
+              </label>
+              {!form.id && (
+                <Typography variant='caption' display='block' color='textSecondary' mt={1}>
+                  * Picture required for new students
+                </Typography>
+              )}
+            </Box>
+          </Box>
+
+          <Divider />
+
+          {/* Basic Info */}
           <Box display='flex' gap={2}>
             <TextField
-              label='First name'
+              label='First Name *'
               value={form.first_name}
               onChange={e => setForm({ ...form, first_name: e.target.value })}
               fullWidth
+              required
             />
             <TextField
-              label='Last name'
+              label='Last Name *'
               value={form.last_name}
               onChange={e => setForm({ ...form, last_name: e.target.value })}
               fullWidth
+              required
             />
             <TextField
-              label='LRN'
+              label='LRN *'
               value={form.lrn}
               onChange={e => setForm({ ...form, lrn: e.target.value })}
               fullWidth
+              required
             />
           </Box>
 
+          {/* Academic Info */}
           <Box display='flex' gap={2}>
-            {/* Grade input: disabled for teachers with single section */}
             <TextField
               select
-              label='Grade'
+              label='Grade *'
               value={form.grade_id}
-              onChange={e => setForm({ ...form, grade_id: e.target.value, section_id: '' })}
+              onChange={e => {
+                const newGradeId = e.target.value
+                const newTeacherId = autoSelectTeacher(newGradeId, form.section_id, true)
+                setForm({
+                  ...form,
+                  grade_id: newGradeId,
+                  section_id: shouldDisableGradeSection ? form.section_id : '', // Keep section if teacher restricted
+                  teacher_id: newTeacherId
+                })
+              }}
               fullWidth
-              disabled={teacherHasSingleSection}
+              disabled={shouldDisableGradeSection}
+              required
             >
               <MenuItem value=''>-- Select Grade --</MenuItem>
               {grades.map(g => (
@@ -516,85 +760,132 @@ export default function StudentsPage() {
               ))}
             </TextField>
 
-            {/* Section input: if teacher with single section, prefilled and disabled.
-                If teacher with many sections, only show their assigned sections.
-                If admin, show all sections for selected grade. */}
             <TextField
               select
-              label='Section'
+              label='Section *'
               value={form.section_id}
-              onChange={e => setForm({ ...form, section_id: e.target.value })}
-              disabled={teacherHasSingleSection}
+              onChange={e => {
+                const newSectionId = e.target.value
+                const newTeacherId = autoSelectTeacher(form.grade_id, newSectionId, true)
+                setForm({
+                  ...form,
+                  section_id: newSectionId,
+                  teacher_id: newTeacherId
+                })
+              }}
+              disabled={shouldDisableGradeSection}
               fullWidth
+              required
             >
               <MenuItem value=''>-- Select Section --</MenuItem>
-
-              {isTeacher
-                ? // teacher allowed sections (if multiple)
-                  teacherAssignedSections.length > 0
-                  ? teacherAssignedSections
-                      .filter(s => !form.grade_id || String(s.grade_id) === String(form.grade_id))
-                      .map(s => (
-                        <MenuItem key={s.id} value={String(s.id)}>
-                          {s.name}
-                        </MenuItem>
-                      ))
-                  : []
-                : // admins: show all non-deleted sections for the selected grade
-                  sectionsAll
-                    .filter(s => !form.grade_id || String(s.grade_id) === String(form.grade_id))
-                    .map(s => (
-                      <MenuItem key={s.id} value={String(s.id)}>
-                        {s.name}
-                      </MenuItem>
-                    ))}
+              {getAvailableSections().map(s => (
+                <MenuItem key={s.id} value={String(s.id)}>
+                  {s.name}
+                </MenuItem>
+              ))}
             </TextField>
           </Box>
 
+          {/* Teacher Assignment */}
+          <TextField
+            select
+            label='Teacher'
+            value={form.teacher_id}
+            onChange={e => setForm({ ...form, teacher_id: e.target.value })}
+            fullWidth
+          >
+            <MenuItem value=''>-- Select Teacher --</MenuItem>
+            {getAvailableTeachers().map(t => (
+              <MenuItem key={t.id} value={String(t.id)}>
+                {getTeacherDisplayName(t)}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <Divider />
+
+          {/* Parent Selection */}
           <Box>
-            <Box display='flex' justifyContent='space-between' alignItems='center'>
-              <strong>Parents</strong>
-              <Button size='small' onClick={addParentRow}>
-                Add Parent
+            <Box display='flex' justifyContent='space-between' alignItems='center' mb={1}>
+              <Typography variant='subtitle1'>Parent/Guardian</Typography>
+              <Button size='small' startIcon={<PersonAddIcon />} onClick={() => setParentDialogOpen(true)}>
+                Add New Parent
               </Button>
             </Box>
 
-            <Box mt={1} display='flex' flexDirection='column' gap={1}>
-              {form.parents.map((p, idx) => (
-                <Box key={idx} display='flex' gap={1} alignItems='center'>
-                  <TextField
-                    label='First name'
-                    value={p.first_name}
-                    onChange={e => updateParent(idx, 'first_name', e.target.value)}
-                  />
-                  <TextField
-                    label='Last name'
-                    value={p.last_name}
-                    onChange={e => updateParent(idx, 'last_name', e.target.value)}
-                  />
-                  <TextField
-                    label='Contact info'
-                    value={p.contact_info}
-                    onChange={e => updateParent(idx, 'contact_info', e.target.value)}
-                  />
-                  <TextField
-                    label='Relation'
-                    value={p.relation || ''}
-                    onChange={e => updateParent(idx, 'relation', e.target.value)}
-                  />
-                  <Button color='error' onClick={() => removeParentRow(idx)}>
-                    Remove
-                  </Button>
-                </Box>
+            <TextField
+              select
+              label='Select Parent'
+              value={form.parent_id}
+              onChange={e => setForm({ ...form, parent_id: e.target.value })}
+              fullWidth
+            >
+              <MenuItem value=''>-- No Parent Selected --</MenuItem>
+              {parents.map(p => (
+                <MenuItem key={p.id} value={String(p.id)}>
+                  {p.first_name} {p.last_name} {p.contact_info ? `(${p.contact_info})` : ''}
+                </MenuItem>
               ))}
-            </Box>
+            </TextField>
           </Box>
         </DialogContent>
 
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
           <Button variant='contained' onClick={save} disabled={saving}>
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? 'Saving...' : form.id ? 'Update Student' : 'Save Student'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Parent Dialog */}
+      <Dialog open={parentDialogOpen} onClose={() => setParentDialogOpen(false)} maxWidth='sm' fullWidth>
+        <DialogTitle>Add New Parent</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          <TextField
+            label='First Name *'
+            value={parentForm.first_name}
+            onChange={e => setParentForm({ ...parentForm, first_name: e.target.value })}
+            fullWidth
+            required
+          />
+          <TextField
+            label='Last Name *'
+            value={parentForm.last_name}
+            onChange={e => setParentForm({ ...parentForm, last_name: e.target.value })}
+            fullWidth
+            required
+          />
+          <TextField
+            label='Contact Info'
+            value={parentForm.contact_info}
+            onChange={e => setParentForm({ ...parentForm, contact_info: e.target.value })}
+            fullWidth
+            placeholder='Phone number, email, etc.'
+          />
+          <TextField
+            select
+            label='Relation'
+            value={parentForm.relation}
+            onChange={e => setParentForm({ ...parentForm, relation: e.target.value })}
+            fullWidth
+          >
+            <MenuItem value=''>-- Select Relation --</MenuItem>
+            <MenuItem value='Father'>Father</MenuItem>
+            <MenuItem value='Mother'>Mother</MenuItem>
+            <MenuItem value='Guardian'>Guardian</MenuItem>
+            <MenuItem value='Grandmother'>Grandmother</MenuItem>
+            <MenuItem value='Grandfather'>Grandfather</MenuItem>
+            <MenuItem value='Aunt'>Aunt</MenuItem>
+            <MenuItem value='Uncle'>Uncle</MenuItem>
+            <MenuItem value='Other'>Other</MenuItem>
+          </TextField>
+        </DialogContent>
+
+        <DialogActions>
+          <Button onClick={() => setParentDialogOpen(false)}>Cancel</Button>
+          <Button variant='contained' onClick={saveParent} disabled={savingParent}>
+            {savingParent ? 'Saving...' : 'Save Parent'}
           </Button>
         </DialogActions>
       </Dialog>

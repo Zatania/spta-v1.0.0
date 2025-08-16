@@ -55,11 +55,11 @@ export default async function handler(req, res) {
       const total = countRows[0]?.total ?? 0
 
       const sql = `
-        SELECT a.id, a.title, a.activity_date, a.created_by, u.full_name AS created_by_name
+        SELECT a.id, a.title, DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date, a.created_by, u.full_name AS created_by_name
         FROM activities a
         LEFT JOIN users u ON u.id = a.created_by
         ${whereSql}
-        ORDER BY a.activity_date DESC, a.created_at DESC
+        ORDER BY a.activity_date ASC
         LIMIT ? OFFSET ?
       `
       const finalParams = [...params, limit, offset]

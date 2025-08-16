@@ -8,12 +8,13 @@ import {
   DialogContent,
   DialogActions,
   TextField,
-  MenuItem,
   Typography,
   Stack,
-  IconButton
+  IconButton,
+  Tooltip
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
+import EditIcon from '@mui/icons-material/Edit'
 import axios from 'axios'
 import { DataGrid } from '@mui/x-data-grid'
 import { useSession } from 'next-auth/react'
@@ -22,18 +23,27 @@ export default function ActivitiesPage() {
   const { data: session } = useSession()
   const [activities, setActivities] = useState([])
   const [loading, setLoading] = useState(false)
+
+  const [me, setMe] = useState(null) // { user, teacher: { assigned_sections: [...] } }
+
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ title: '', activity_date: '' })
-  const [assignOpen, setAssignOpen] = useState(false)
-  const [assignForm, setAssignForm] = useState({ activity_id: null, grade_id: '', section_id: '' })
-  const [grades, setGrades] = useState([])
-  const [sections, setSections] = useState([])
+  const emptyForm = { id: null, title: '', activity_date: '' }
+  const [form, setForm] = useState(emptyForm)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
+    fetchMyInfo()
     fetchActivities()
-    fetchGrades()
-    fetchSections()
   }, [])
+
+  const fetchMyInfo = async () => {
+    try {
+      const res = await axios.get('/api/teachers/me')
+      setMe(res.data)
+    } catch (err) {
+      console.error('Failed to fetch my info', err)
+    }
+  }
 
   const fetchActivities = async () => {
     setLoading(true)
@@ -47,83 +57,84 @@ export default function ActivitiesPage() {
     }
   }
 
-  const fetchGrades = async () => {
-    try {
-      const res = await axios.get('/api/grades')
-      setGrades(res.data ?? [])
-    } catch (e) {
-      console.error(e)
-    }
-  }
-
-  const fetchSections = async () => {
-    try {
-      const res = await axios.get('/api/sections', { params: { page: 1, page_size: 1000 } })
-      const list = res.data?.sections ?? res.data ?? []
-      setSections(list.map(s => ({ id: s.id, name: s.section_name ?? s.name, grade_id: s.grade_id })))
-    } catch (e) {
-      console.error(e)
-    }
-  }
-
   const openCreate = () => {
-    setForm({ title: '', activity_date: '' })
+    setForm(emptyForm)
     setOpen(true)
   }
 
-  const createActivity = async () => {
+  const openEdit = row => {
+    setForm({
+      id: row.id,
+      title: row.title,
+      activity_date: row.activity_date
+    })
+    setOpen(true)
+  }
+
+  const saveActivity = async () => {
     if (!form.title || !form.activity_date) {
       alert('Title and date required')
 
       return
     }
+    if (!me?.teacher?.assigned_sections?.length) {
+      alert('No assigned grade/section found for this teacher.')
+
+      return
+    }
+
+    const assignedSection = me.teacher.assigned_sections[0] // always first assigned section
+
+    const payload = {
+      title: form.title,
+      activity_date: form.activity_date
+    }
+
+    setSaving(true)
     try {
-      await axios.post('/api/activities', form)
+      if (form.id) {
+        // update only title/date
+        await axios.put(`/api/activities/${form.id}`, payload)
+      } else {
+        // create activity
+        const createRes = await axios.post('/api/activities', payload)
+        const activityId = createRes.data?.id || createRes.data?.activity?.id
+
+        // assign to teacher via /api/activity_assignments
+        if (activityId) {
+          await axios.post('/api/activity_assignments', {
+            activity_id: activityId,
+            grade_id: assignedSection.grade_id,
+            section_id: assignedSection.id
+          })
+        }
+      }
+
       setOpen(false)
       fetchActivities()
     } catch (err) {
       console.error(err)
-      alert(err?.response?.data?.message ?? 'Create failed')
-    }
-  }
-
-  // Assign modal controls
-  const openAssign = activityId => {
-    setAssignForm({ activity_id: activityId, grade_id: '', section_id: '' })
-    setAssignOpen(true)
-  }
-
-  const createAssignment = async () => {
-    const { activity_id, grade_id, section_id } = assignForm
-    if (!activity_id || !grade_id || !section_id) {
-      alert('Select grade and section')
-
-      return
-    }
-    try {
-      await axios.post('/api/activity_assignments', assignForm)
-      setAssignOpen(false)
-      fetchActivities()
-    } catch (err) {
-      console.error(err)
-      alert(err?.response?.data?.message ?? 'Assign failed')
+      alert(err?.response?.data?.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
     }
   }
 
   const columns = [
-    { field: 'id', headerName: 'ID', width: 80 },
     { field: 'title', headerName: 'Title', flex: 1 },
     { field: 'activity_date', headerName: 'Date', width: 130 },
     { field: 'created_by_name', headerName: 'Created by', width: 180 },
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 220,
+      width: 120,
       renderCell: params => (
         <Stack direction='row' spacing={1}>
-          <Button size='small' onClick={() => openAssign(params.row.id)}>
-            Assign
-          </Button>
+          <Tooltip title='Edit'>
+            <IconButton size='small' onClick={() => openEdit(params.row)}>
+              <EditIcon fontSize='small' />
+            </IconButton>
+          </Tooltip>
         </Stack>
       )
     }
@@ -142,9 +153,9 @@ export default function ActivitiesPage() {
         <DataGrid rows={activities} columns={columns} getRowId={r => r.id} loading={loading} />
       </div>
 
-      {/* Create Activity modal */}
+      {/* Create/Edit Activity modal */}
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth='sm'>
-        <DialogTitle>Create Activity</DialogTitle>
+        <DialogTitle>{form.id ? 'Edit Activity' : 'Create Activity'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <TextField
             label='Title'
@@ -163,53 +174,8 @@ export default function ActivitiesPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
-          <Button variant='contained' onClick={createActivity}>
-            Create
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Assign modal */}
-      <Dialog open={assignOpen} onClose={() => setAssignOpen(false)} fullWidth maxWidth='sm'>
-        <DialogTitle>Assign Activity to Grade/Section</DialogTitle>
-        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <TextField
-            select
-            label='Grade'
-            value={assignForm.grade_id}
-            onChange={e => setAssignForm({ ...assignForm, grade_id: e.target.value, section_id: '' })}
-            fullWidth
-          >
-            <MenuItem value=''>-- Select Grade --</MenuItem>
-            {grades.map(g => (
-              <MenuItem key={g.id} value={String(g.id)}>
-                {g.name}
-              </MenuItem>
-            ))}
-          </TextField>
-
-          <TextField
-            select
-            label='Section'
-            value={assignForm.section_id}
-            onChange={e => setAssignForm({ ...assignForm, section_id: e.target.value })}
-            fullWidth
-            disabled={!assignForm.grade_id}
-          >
-            <MenuItem value=''>-- Select Section --</MenuItem>
-            {sections
-              .filter(s => String(s.grade_id) === String(assignForm.grade_id))
-              .map(s => (
-                <MenuItem key={s.id} value={String(s.id)}>
-                  {s.name}
-                </MenuItem>
-              ))}
-          </TextField>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAssignOpen(false)}>Cancel</Button>
-          <Button variant='contained' onClick={createAssignment}>
-            Assign
+          <Button variant='contained' onClick={saveActivity} disabled={saving}>
+            {saving ? 'Saving...' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>

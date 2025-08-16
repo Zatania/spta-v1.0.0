@@ -12,7 +12,6 @@ import { buildAbilityFor } from 'src/configs/acl'
 
 // ** Component Import
 import NotAuthorized from 'src/pages/401'
-import Spinner from 'src/@core/components/spinner'
 import BlankLayout from 'src/@core/layouts/BlankLayout'
 
 // ** Hooks
@@ -20,6 +19,9 @@ import { useSession } from 'next-auth/react'
 
 // ** Util Import
 import getHomeRoute from 'src/layouts/components/acl/getHomeRoute'
+
+// ** UserSpinner Import
+import UserSpinner from 'src/layouts/components/UserSpinner'
 
 const AclGuard = props => {
   // ** Props
@@ -42,7 +44,7 @@ const AclGuard = props => {
   if (session.data && session.data.user && !ability) {
     ability = buildAbilityFor(session.data.user.role, aclAbilities.subject)
     if (router.route === '/') {
-      return <Spinner />
+      return <UserSpinner />
     }
   }
 
@@ -60,7 +62,7 @@ const AclGuard = props => {
   // Check the access of current user and render pages
   if (ability && session.data && session.data.user && ability.can(aclAbilities.action, aclAbilities.subject)) {
     if (router.route === '/') {
-      return <Spinner />
+      return <UserSpinner />
     }
 
     return <AbilityContext.Provider value={ability}>{children}</AbilityContext.Provider>

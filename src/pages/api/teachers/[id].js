@@ -127,9 +127,14 @@ export default async function handler(req, res) {
         return res.status(200).json({ message: 'Teacher and related activities soft-deleted' })
       } catch (err) {
         if (conn) {
-          await conn.rollback().catch(() => {})
-          conn.release().catch(() => {})
+          try {
+            await conn.rollback()
+          } catch (_) {}
+          try {
+            conn.release()
+          } catch (_) {}
         }
+
         console.error(`DELETE /api/teachers/${teacherId} error:`, err)
 
         return res.status(500).json({ message: 'Internal server error' })

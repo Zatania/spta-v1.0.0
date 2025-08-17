@@ -1029,8 +1029,8 @@ const Dashboard = () => {
                       exportTableToCSV(
                         activitiesOverviewData.map(g => ({
                           grade: g.grade_name,
-                          present: g.present_count || 0,
-                          absent: g.absent_count || 0
+                          present: g.parent_present_count || 0,
+                          absent: g.parent_absent_count || 0
                         })),
                         'activities_overview.csv'
                       )
@@ -1038,8 +1038,8 @@ const Dashboard = () => {
                       exportTableToCSV(
                         activitiesByGrade.map(s => ({
                           section: s.section_name,
-                          present: s.present_count || 0,
-                          absent: s.absent_count || 0
+                          present: s.parent_present_count || 0,
+                          absent: s.parent_absent_count || 0
                         })),
                         'activities_by_section.csv'
                       )
@@ -1048,8 +1048,8 @@ const Dashboard = () => {
                         activitiesSectionActivities.map(a => ({
                           activity: a.title,
                           date: a.activity_date,
-                          present: a.present_count || 0,
-                          absent: a.absent_count || 0
+                          present: a.parent_present_count || 0,
+                          absent: a.parent_absent_count || 0
                         })),
                         'section_activities.csv'
                       )
@@ -1082,8 +1082,8 @@ const Dashboard = () => {
                           <Tooltip />
                           <Legend />
                           <Bar
-                            dataKey='present_count'
-                            name='Present'
+                            dataKey='parent_present_count'
+                            name='Parent Present'
                             fill={attendanceColors.Present}
                             onClick={data => handleActivitiesOverviewGradeClick(data.payload)}
                             style={{ cursor: 'pointer' }}
@@ -1092,7 +1092,7 @@ const Dashboard = () => {
                               <Cell key={`present-${i}`} fill={attendanceColors['Present']} />
                             ))}
                           </Bar>
-                          <Bar dataKey='absent_count' name='Absent' fill={attendanceColors.Absent}>
+                          <Bar dataKey='parent_absent_count' name='Parent Absent' fill={attendanceColors.Absent}>
                             {activitiesOverviewData.map((g, i) => (
                               <Cell key={`absent-${i}`} fill={attendanceColors['Absent']} />
                             ))}
@@ -1117,8 +1117,8 @@ const Dashboard = () => {
                           {activitiesOverviewData.map(g => (
                             <TableRow key={g.grade_id} hover>
                               <TableCell>{g.grade_name}</TableCell>
-                              <TableCell align='right'>{g.present_count ?? 0}</TableCell>
-                              <TableCell align='right'>{g.absent_count ?? 0}</TableCell>
+                              <TableCell align='right'>{g.parent_present_count ?? 0}</TableCell>
+                              <TableCell align='right'>{g.parent_absent_count ?? 0}</TableCell>
                               <TableCell align='right'>
                                 <Button size='small' onClick={() => handleActivitiesOverviewGradeClick(g)}>
                                   View Sections
@@ -1158,8 +1158,8 @@ const Dashboard = () => {
                           <Tooltip />
                           <Legend />
                           <Bar
-                            dataKey='present_count'
-                            name='Present'
+                            dataKey='parent_present_count'
+                            name='Parent Present'
                             fill={attendanceColors.Present}
                             onClick={data => handleActivitiesSectionClick(data.payload)}
                             style={{ cursor: 'pointer' }}
@@ -1168,7 +1168,7 @@ const Dashboard = () => {
                               <Cell key={`sec-present-${i}`} fill={attendanceColors['Present']} />
                             ))}
                           </Bar>
-                          <Bar dataKey='absent_count' name='Absent' fill={attendanceColors.Absent}>
+                          <Bar dataKey='parent_absent_count' name='Parent Absent' fill={attendanceColors.Absent}>
                             {activitiesByGrade.map((s, i) => (
                               <Cell key={`sec-absent-${i}`} fill={attendanceColors['Absent']} />
                             ))}
@@ -1193,8 +1193,8 @@ const Dashboard = () => {
                           {activitiesByGrade.map(s => (
                             <TableRow key={s.section_id} hover>
                               <TableCell>{s.section_name}</TableCell>
-                              <TableCell align='right'>{s.present_count ?? 0}</TableCell>
-                              <TableCell align='right'>{s.absent_count ?? 0}</TableCell>
+                              <TableCell align='right'>{s.parent_present_count ?? 0}</TableCell>
+                              <TableCell align='right'>{s.parent_absent_count ?? 0}</TableCell>
                               <TableCell align='right'>
                                 <Button size='small' onClick={() => handleActivitiesSectionClick(s)}>
                                   View Activities
@@ -1237,8 +1237,8 @@ const Dashboard = () => {
                           <Tooltip />
                           <Legend />
                           <Bar
-                            dataKey='present_count'
-                            name='Present'
+                            dataKey='parent_present_count'
+                            name='Parent Present'
                             fill={attendanceColors.Present}
                             onClick={data => handleActivitiesActivityClick(data.payload)}
                             style={{ cursor: 'pointer' }}
@@ -1247,7 +1247,7 @@ const Dashboard = () => {
                               <Cell key={`act-present-${i}`} fill={attendanceColors['Present']} />
                             ))}
                           </Bar>
-                          <Bar dataKey='absent_count' name='Absent' fill={attendanceColors.Absent}>
+                          <Bar dataKey='parent_absent_count' name='Parent Absent' fill={attendanceColors.Absent}>
                             {activitiesSectionActivities.map((a, i) => (
                               <Cell key={`act-absent-${i}`} fill={attendanceColors['Absent']} />
                             ))}
@@ -1274,8 +1274,8 @@ const Dashboard = () => {
                             <TableRow key={a.id} hover>
                               <TableCell>{a.title}</TableCell>
                               <TableCell>{a.activity_date}</TableCell>
-                              <TableCell align='right'>{a.present_count ?? 0}</TableCell>
-                              <TableCell align='right'>{a.absent_count ?? 0}</TableCell>
+                              <TableCell align='right'>{a.parent_present_count ?? 0}</TableCell>
+                              <TableCell align='right'>{a.parent_absent_count ?? 0}</TableCell>
                               <TableCell align='right'>
                                 <Button size='small' onClick={() => handleActivitiesActivityClick(a)}>
                                   View Students
@@ -1650,8 +1650,8 @@ const Dashboard = () => {
                   sectionActivities.map(a => ({
                     date: a.activity_date,
                     title: a.title,
-                    present: a.present_count || 0,
-                    absent: a.absent_count || 0,
+                    present: a.parent_present_count || 0,
+                    absent: a.parent_absent_count || 0,
                     paid: a.paid_count || 0,
                     unpaid: a.unpaid_count || 0
                   })),
@@ -1692,10 +1692,10 @@ const Dashboard = () => {
                     <TableCell>{activity.activity_date}</TableCell>
                     <TableCell>{activity.title}</TableCell>
                     <TableCell align='center'>
-                      <Chip label={activity.present_count || 0} color='success' size='small' />
+                      <Chip label={activity.parent_present_count || 0} color='success' size='small' />
                     </TableCell>
                     <TableCell align='center'>
-                      <Chip label={activity.absent_count || 0} color='error' size='small' />
+                      <Chip label={activity.parent_absent_count || 0} color='error' size='small' />
                     </TableCell>
                     <TableCell align='center'>
                       <Chip label={activity.paid_count || 0} color='success' size='small' />

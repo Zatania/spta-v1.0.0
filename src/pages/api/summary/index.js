@@ -71,7 +71,8 @@ export default async function handler(req, res) {
         SELECT
           SUM(att.status = 'present') AS total_present,
           SUM(att.status = 'absent')  AS total_absent,
-          SUM(att.parent_present = 1) AS parent_present_count
+          SUM(att.parent_present = 1) AS parent_present_count,
+          SUM(att.parent_present = 0) AS parent_absent_count
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
@@ -170,7 +171,8 @@ export default async function handler(req, res) {
           SELECT
             SUM(att.status = 'present') AS present_count,
             SUM(att.status = 'absent')  AS absent_count,
-            SUM(att.parent_present = 1) AS parent_present_count
+            SUM(att.parent_present = 1) AS parent_present_count,
+            SUM(att.parent_present = 0) AS parent_absent_count
           FROM attendance att
           JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
           WHERE aa.activity_id = ? AND aa.section_id = ?
@@ -226,6 +228,7 @@ export default async function handler(req, res) {
           SUM(att.status = 'present') AS present_count,
           SUM(att.status = 'absent')  AS absent_count,
           SUM(att.parent_present = 1) AS parent_present_count,
+          SUM(att.parent_present = 0) AS parent_absent_count,
           COUNT(att.id) AS total_records
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
@@ -327,7 +330,8 @@ export default async function handler(req, res) {
           g.name AS grade_name,
           SUM(att.status = 'present') AS present_count,
           SUM(att.status = 'absent') AS absent_count,
-          SUM(att.parent_present = 1) AS parent_present_count
+          SUM(att.parent_present = 1) AS parent_present_count,
+          SUM(att.parent_present = 0) AS parent_absent_count
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
@@ -355,7 +359,8 @@ export default async function handler(req, res) {
           s.name AS section_name,
           SUM(att.status = 'present') AS present_count,
           SUM(att.status = 'absent') AS absent_count,
-          SUM(att.parent_present = 1) AS parent_present_count
+          SUM(att.parent_present = 1) AS parent_present_count,
+          SUM(att.parent_present = 0) AS parent_absent_count
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
@@ -397,7 +402,8 @@ export default async function handler(req, res) {
           SELECT
             SUM(att.status = 'present') AS present_count,
             SUM(att.status = 'absent') AS absent_count,
-            SUM(att.parent_present = 1) AS parent_present_count
+            SUM(att.parent_present = 1) AS parent_present_count,
+            SUM(att.parent_present = 0) AS parent_absent_count
           FROM attendance att
           JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
           WHERE aa.activity_id = ? AND aa.section_id = ?

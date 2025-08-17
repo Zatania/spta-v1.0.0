@@ -298,20 +298,20 @@ export default function TeacherDashboard() {
     }
   }
 
-  // Prepare attendance chart data
+  // Prepare attendance chart data (force integer counts)
   const attendanceChartData = {
     labels: rows.map(row => row.title),
     datasets: [
       {
         label: 'Present',
-        data: rows.map(row => row.present_count),
+        data: rows.map(row => Math.round(Number(row.present_count) || 0)),
         backgroundColor: '#4CAF50',
         borderColor: '#4CAF50',
         borderWidth: 1
       },
       {
         label: 'Absent',
-        data: rows.map(row => row.absent_count),
+        data: rows.map(row => Math.round(Number(row.absent_count) || 0)),
         backgroundColor: '#F44336',
         borderColor: '#F44336',
         borderWidth: 1
@@ -319,20 +319,20 @@ export default function TeacherDashboard() {
     ]
   }
 
-  // Prepare payment chart data
+  // Prepare payment chart data (force integer counts)
   const paymentChartData = {
     labels: rows.map(row => row.title),
     datasets: [
       {
         label: 'Paid',
-        data: rows.map(row => row.paid_count),
+        data: rows.map(row => Math.round(Number(row.paid_count) || 0)),
         backgroundColor: '#2196F3',
         borderColor: '#2196F3',
         borderWidth: 1
       },
       {
         label: 'Unpaid',
-        data: rows.map(row => row.unpaid_count),
+        data: rows.map(row => Math.round(Number(row.unpaid_count) || 0)),
         backgroundColor: '#FF9800',
         borderColor: '#FF9800',
         borderWidth: 1
@@ -349,7 +349,16 @@ export default function TeacherDashboard() {
       },
       tooltip: {
         mode: 'index',
-        intersect: false
+        intersect: false,
+
+        // format tooltip values as integers
+        callbacks: {
+          label: function (context) {
+            const v = context.raw
+
+            return `${context.dataset.label}: ${Math.round(Number(v) || 0)}`
+          }
+        }
       }
     },
     scales: {
@@ -366,7 +375,16 @@ export default function TeacherDashboard() {
           display: true,
           text: 'Count'
         },
-        beginAtZero: true
+        beginAtZero: true,
+        ticks: {
+          // force integer ticks
+          stepSize: 1,
+
+          // prevent decimal formatting — show whole numbers only
+          callback: function (value) {
+            return Number(value).toString()
+          }
+        }
       }
     },
     onClick: (event, elements) => {

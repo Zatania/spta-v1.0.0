@@ -30,29 +30,37 @@ export default async function handler(req, res) {
 
     const [totals] = await db.query(
       `
-      SELECT aa.activity_id,
-            COALESCE(SUM(att.present_count),0)   AS present_count,
-            COALESCE(SUM(att.absent_count),0)    AS absent_count,
-            COALESCE(SUM(pay.paid_count),0)      AS paid_count,
-            COALESCE(SUM(pay.unpaid_count),0)    AS unpaid_count
+      SELECT
+          aa.activity_id,
+          COALESCE(SUM(att.present_count),0)   AS present_count,
+          COALESCE(SUM(att.absent_count),0)    AS absent_count,
+          COALESCE(SUM(pay.paid_count),0)      AS paid_count,
+          COALESCE(SUM(pay.unpaid_count),0)    AS unpaid_count
       FROM activity_assignments aa
       LEFT JOIN (
-          SELECT activity_assignment_id,
-                SUM(parent_present = 1) AS present_count,
-                SUM(parent_present = 0) AS absent_count
-          FROM attendance
-          GROUP BY activity_assignment_id
+          SELECT
+              at.activity_assignment_id,
+              SUM(at.parent_present = 1) AS present_count,
+              SUM(at.parent_present = 0) AS absent_count
+          FROM attendance at
+          INNER JOIN students s ON s.id = at.student_id AND s.is_deleted = 0
+          GROUP BY at.activity_assignment_id
       ) att ON att.activity_assignment_id = aa.id
       LEFT JOIN (
-          SELECT activity_assignment_id,
-                SUM(paid = 1) AS paid_count,
-                SUM(paid = 0) AS unpaid_count
-          FROM payments
-          GROUP BY activity_assignment_id
+          SELECT
+              p.activity_assignment_id,
+              SUM(p.paid = 1) AS paid_count,
+              SUM(p.paid = 0) AS unpaid_count
+          FROM payments p
+          INNER JOIN students s ON s.id = p.student_id AND s.is_deleted = 0
+          GROUP BY p.activity_assignment_id
       ) pay ON pay.activity_assignment_id = aa.id
       WHERE aa.activity_id IN (${activityIds.map(() => '?').join(',')})
-        AND aa.section_id IN (SELECT section_id FROM teacher_sections WHERE user_id = ?)
+        AND aa.section_id IN (
+            SELECT section_id FROM teacher_sections WHERE user_id = ?
+        )
       GROUP BY aa.activity_id;
+
 
     `,
       [...activityIds, teacherId]

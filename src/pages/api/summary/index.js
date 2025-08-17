@@ -69,14 +69,17 @@ export default async function handler(req, res) {
       const [attendanceRows] = await db.query(
         `
         SELECT
-          SUM(att.status = 'present') AS total_present,
-          SUM(att.status = 'absent')  AS total_absent,
-          SUM(att.parent_present = 1) AS parent_present_count,
-          SUM(att.parent_present = 0) AS parent_absent_count
+            SUM(att.status = 'present') AS total_present,
+            SUM(att.status = 'absent')  AS total_absent,
+            SUM(att.parent_present = 1) AS parent_present_count,
+            SUM(att.parent_present = 0) AS parent_absent_count
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
-        WHERE a.is_deleted = 0 ${dateWhereA}
+        JOIN students s ON s.id = att.student_id AND s.is_deleted = 0
+        WHERE a.is_deleted = 0
+          ${dateWhereA};
+
         `,
         dateParams
       )
@@ -85,12 +88,15 @@ export default async function handler(req, res) {
       const [paymentsRows] = await db.query(
         `
         SELECT
-          SUM(p.paid = 1) AS total_paid,
-          SUM(p.paid = 0) AS total_unpaid
+            SUM(p.paid = 1) AS total_paid,
+            SUM(p.paid = 0) AS total_unpaid
         FROM payments p
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
-        WHERE a.is_deleted = 0 ${dateWhereA}
+        JOIN students s ON s.id = p.student_id AND s.is_deleted = 0
+        WHERE a.is_deleted = 0
+          ${dateWhereA};
+
         `,
         dateParams
       )
@@ -274,17 +280,21 @@ export default async function handler(req, res) {
       const [rows] = await db.query(
         `
         SELECT
-          aa.grade_id,
-          g.name AS grade_name,
-          SUM(p.paid = 1) AS paid_count,
-          SUM(p.paid = 0) AS unpaid_count
+            aa.grade_id,
+            g.name AS grade_name,
+            SUM(p.paid = 1) AS paid_count,
+            SUM(p.paid = 0) AS unpaid_count
         FROM payments p
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
         JOIN grades g ON g.id = aa.grade_id
-        WHERE a.is_deleted = 0 ${dateWhereA} ${gradeFilter}
+        JOIN students s ON s.id = p.student_id AND s.is_deleted = 0
+        WHERE a.is_deleted = 0
+          ${dateWhereA}
+          ${gradeFilter}
         GROUP BY aa.grade_id, g.name
-        ORDER BY aa.grade_id
+        ORDER BY aa.grade_id;
+
         `,
         params
       )
@@ -303,17 +313,21 @@ export default async function handler(req, res) {
       const [rows] = await db.query(
         `
         SELECT
-          aa.section_id,
-          s.name AS section_name,
-          SUM(p.paid = 1) AS paid_count,
-          SUM(p.paid = 0) AS unpaid_count
+            aa.section_id,
+            s.name AS section_name,
+            SUM(p.paid = 1) AS paid_count,
+            SUM(p.paid = 0) AS unpaid_count
         FROM payments p
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
-        JOIN sections s ON s.id = aa.section_id
-        WHERE a.is_deleted = 0 AND aa.grade_id = ? ${dateWhereA}
+        JOIN sections s ON s.id = aa.section_id AND s.is_deleted = 0
+        JOIN students st ON st.id = p.student_id AND st.is_deleted = 0
+        WHERE a.is_deleted = 0
+          AND aa.grade_id = ?
+          ${dateWhereA}
         GROUP BY aa.section_id, s.name
-        ORDER BY s.name
+        ORDER BY s.name;
+
         `,
         params
       )
@@ -326,19 +340,22 @@ export default async function handler(req, res) {
       const [rows] = await db.query(
         `
         SELECT
-          aa.grade_id,
-          g.name AS grade_name,
-          SUM(att.status = 'present') AS present_count,
-          SUM(att.status = 'absent') AS absent_count,
-          SUM(att.parent_present = 1) AS parent_present_count,
-          SUM(att.parent_present = 0) AS parent_absent_count
+            aa.grade_id,
+            g.name AS grade_name,
+            SUM(att.status = 'present') AS present_count,
+            SUM(att.status = 'absent') AS absent_count,
+            SUM(att.parent_present = 1) AS parent_present_count,
+            SUM(att.parent_present = 0) AS parent_absent_count
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
         JOIN grades g ON g.id = aa.grade_id
-        WHERE a.is_deleted = 0 ${dateWhereA}
+        JOIN students s ON s.id = att.student_id AND s.is_deleted = 0
+        WHERE a.is_deleted = 0
+          ${dateWhereA}
         GROUP BY aa.grade_id, g.name
-        ORDER BY aa.grade_id
+        ORDER BY aa.grade_id;
+
         `,
         dateParams
       )
@@ -355,19 +372,23 @@ export default async function handler(req, res) {
       const [rows] = await db.query(
         `
         SELECT
-          aa.section_id,
-          s.name AS section_name,
-          SUM(att.status = 'present') AS present_count,
-          SUM(att.status = 'absent') AS absent_count,
-          SUM(att.parent_present = 1) AS parent_present_count,
-          SUM(att.parent_present = 0) AS parent_absent_count
+            aa.section_id,
+            s.name AS section_name,
+            SUM(att.status = 'present') AS present_count,
+            SUM(att.status = 'absent') AS absent_count,
+            SUM(att.parent_present = 1) AS parent_present_count,
+            SUM(att.parent_present = 0) AS parent_absent_count
         FROM attendance att
         JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
-        JOIN sections s ON s.id = aa.section_id
-        WHERE a.is_deleted = 0 AND aa.grade_id = ? ${dateWhereA}
+        JOIN sections s ON s.id = aa.section_id AND s.is_deleted = 0
+        JOIN students st ON st.id = att.student_id AND st.is_deleted = 0
+        WHERE a.is_deleted = 0
+          AND aa.grade_id = ?
+          ${dateWhereA}
         GROUP BY aa.section_id, s.name
-        ORDER BY s.name
+        ORDER BY s.name;
+
         `,
         [grade_id, ...dateParams]
       )

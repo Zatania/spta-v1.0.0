@@ -41,8 +41,14 @@ export default async function handler(req, res) {
       // teachers: restrict to activities that affect their sections OR created_by them
       if (session.user.role === 'teacher') {
         where.push(`(
-          a.created_by = ?
-          OR a.id IN (SELECT aa.activity_id FROM activity_assignments aa WHERE aa.section_id IN (SELECT section_id FROM teacher_sections WHERE user_id = ?))
+          (a.created_by = ? AND a.created_by IN (SELECT id FROM users WHERE is_deleted = 0))
+          OR a.id IN (
+            SELECT aa.activity_id
+            FROM activity_assignments aa
+            WHERE aa.section_id IN (
+              SELECT section_id FROM teacher_sections WHERE user_id = ?
+            )
+          )
         )`)
         params.push(session.user.id, session.user.id)
       }

@@ -195,7 +195,11 @@ export default async function handler(req, res) {
         if (newPictureUrl && oldPictureUrl && oldPictureUrl !== newPictureUrl) {
           const oldFilePath = path.join(process.cwd(), 'public', oldPictureUrl)
           if (fs.existsSync(oldFilePath)) {
-            fs.unlinkSync(oldFilePath).catch(() => {})
+            try {
+              fs.unlinkSync(oldFilePath)
+            } catch (err) {
+              console.warn('Failed to delete old picture file:', err)
+            }
           }
         }
 
@@ -208,7 +212,11 @@ export default async function handler(req, res) {
 
         // Clean up uploaded file on error
         if (pictureFile?.filepath && fs.existsSync(pictureFile.filepath)) {
-          fs.unlinkSync(pictureFile.filepath).catch(() => {})
+          try {
+            fs.unlinkSync(pictureFile.filepath)
+          } catch (err) {
+            console.warn('Failed to delete temp file:', err)
+          }
         }
 
         console.error('Update student error', err)
@@ -236,7 +244,12 @@ export default async function handler(req, res) {
       if (studentData.length && studentData[0].picture_url) {
         const picturePath = path.join(process.cwd(), 'public', studentData[0].picture_url)
         if (fs.existsSync(picturePath)) {
-          fs.unlinkSync(picturePath).catch(() => {})
+          try {
+            fs.unlinkSync(picturePath)
+          } catch (err) {
+            // Log the error but don't fail the request
+            console.warn('Failed to delete picture file:', err)
+          }
         }
       }
 

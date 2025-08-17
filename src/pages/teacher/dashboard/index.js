@@ -1,5 +1,5 @@
 // pages/teacher/dashboard.js
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   Box,
   Card,
@@ -51,6 +51,8 @@ export default function TeacherDashboard() {
   const [downloadingReport, setDownloadingReport] = useState(false)
   const router = useRouter()
 
+  const attendanceDetailsRef = useRef(null)
+
   const fetchSummary = async () => {
     setLoading(true)
     try {
@@ -67,11 +69,11 @@ export default function TeacherDashboard() {
       }))
       setRows(activities)
 
-      // Auto-select first activity if available
-      if (activities.length > 0 && !selectedActivity) {
-        setSelectedActivity(activities[0])
-        fetchStudents(activities[0].id)
-      }
+      // Remove auto-selection - only load details when user clicks
+      // if (activities.length > 0 && !selectedActivity) {
+      //   setSelectedActivity(activities[0])
+      //   fetchStudents(activities[0].id)
+      // }
     } finally {
       setLoading(false)
     }
@@ -104,6 +106,15 @@ export default function TeacherDashboard() {
     setSelectedActivity(activity)
     fetchStudents(activity.id)
   }
+
+  useEffect(() => {
+    if (selectedActivity && attendanceDetailsRef.current) {
+      attendanceDetailsRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      })
+    }
+  }, [selectedActivity])
 
   const handleDownloadForm = async student => {
     if (!student || !selectedActivity) return
@@ -321,6 +332,9 @@ export default function TeacherDashboard() {
           <Typography variant='h6' gutterBottom>
             Attendance Summary
           </Typography>
+          <Typography variant='body2' color='text.secondary' sx={{ mb: 2 }}>
+            Click on any activity row to view detailed attendance information
+          </Typography>
           <div style={{ width: '100%' }}>
             <DataGrid
               autoHeight
@@ -345,7 +359,7 @@ export default function TeacherDashboard() {
 
       {/* Detailed Students Attendance Table */}
       {selectedActivity && (
-        <Card>
+        <Card ref={attendanceDetailsRef}>
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Box>

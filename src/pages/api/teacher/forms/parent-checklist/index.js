@@ -20,6 +20,7 @@ export default async function handler(req, res) {
   const teacherId = isTeacher ? session.user.id : null
   const studentId = Number(req.query.student_id)
   const schoolYear = (req.query.school_year || '').trim()
+  const isPreview = req.query.preview === 'true' // Check if this is a preview request
 
   if (!studentId) return res.status(400).json({ message: 'student_id is required' })
 
@@ -158,8 +159,16 @@ export default async function handler(req, res) {
     const filename = `SPTA_Checklist_${student.last_name}_${student.first_name}_${student.grade_name}_${
       student.section_name
     }${schoolYear ? `_${schoolYear}` : ''}.pdf`
+
+    // Set appropriate headers based on whether this is a preview or download
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\s+/g, '_')}"`)
+    if (isPreview) {
+      // For preview, set inline disposition so PDF opens in browser
+      res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/\s+/g, '_')}"`)
+    } else {
+      // For download, set attachment disposition
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\s+/g, '_')}"`)
+    }
 
     const doc = new PDFDocument({ size: 'A4', margin: 36 })
     doc.pipe(res)

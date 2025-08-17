@@ -11,7 +11,10 @@ import {
   Typography,
   Stack,
   IconButton,
-  Tooltip
+  Tooltip,
+  FormControlLabel,
+  Checkbox,
+  Switch
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
@@ -27,7 +30,7 @@ export default function ActivitiesPage() {
   const [me, setMe] = useState(null) // { user, teacher: { assigned_sections: [...] } }
 
   const [open, setOpen] = useState(false)
-  const emptyForm = { id: null, title: '', activity_date: '' }
+  const emptyForm = { id: null, title: '', activity_date: '', payments_enabled: true }
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
 
@@ -48,6 +51,7 @@ export default function ActivitiesPage() {
   const fetchActivities = async () => {
     setLoading(true)
     try {
+      // Make sure your API returns payments_enabled
       const res = await axios.get('/api/activities')
       setActivities(res.data.activities ?? [])
     } catch (err) {
@@ -66,7 +70,8 @@ export default function ActivitiesPage() {
     setForm({
       id: row.id,
       title: row.title,
-      activity_date: row.activity_date
+      activity_date: row.activity_date,
+      payments_enabled: !!row.payments_enabled
     })
     setOpen(true)
   }
@@ -87,13 +92,14 @@ export default function ActivitiesPage() {
 
     const payload = {
       title: form.title,
-      activity_date: form.activity_date
+      activity_date: form.activity_date,
+      payments_enabled: form.payments_enabled ? 1 : 0
     }
 
     setSaving(true)
     try {
       if (form.id) {
-        // update only title/date
+        // update only title/date/payments flag
         await axios.put(`/api/activities/${form.id}`, payload)
       } else {
         // create activity
@@ -120,10 +126,41 @@ export default function ActivitiesPage() {
     }
   }
 
+  const handleTogglePaymentsInline = async (id, checked) => {
+    // optimistic update
+    setActivities(prev => prev.map(a => (a.id === id ? { ...a, payments_enabled: checked } : a)))
+    try {
+      await axios.put(`/api/activities/${id}`, { payments_enabled: checked ? 1 : 0 })
+    } catch (err) {
+      console.error(err)
+
+      // revert on error
+      setActivities(prev => prev.map(a => (a.id === id ? { ...a, payments_enabled: !checked } : a)))
+      alert('Failed to update payments flag')
+    }
+  }
+
   const columns = [
     { field: 'title', headerName: 'Title', flex: 1 },
     { field: 'activity_date', headerName: 'Date', width: 130 },
     { field: 'created_by_name', headerName: 'Created by', width: 180 },
+    {
+      field: 'payments_enabled',
+      headerName: 'Payments',
+      width: 140,
+      renderCell: params => (
+        <FormControlLabel
+          control={
+            <Switch
+              checked={!!params.row.payments_enabled}
+              onChange={e => handleTogglePaymentsInline(params.row.id, e.target.checked)}
+              size='small'
+            />
+          }
+          label={params.row.payments_enabled ? 'Enabled' : 'Disabled'}
+        />
+      )
+    },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -150,7 +187,7 @@ export default function ActivitiesPage() {
       </Box>
 
       <div style={{ height: 500, width: '100%' }}>
-        <DataGrid rows={activities} columns={columns} getRowId={r => r.id} loading={loading} />
+        <DataGrid rows={activities} columns={columns} getRowId={r => r.id} loading={loading} disableSelectionOnClick />
       </div>
 
       {/* Create/Edit Activity modal */}
@@ -170,6 +207,16 @@ export default function ActivitiesPage() {
             onChange={e => setForm({ ...form, activity_date: e.target.value })}
             InputLabelProps={{ shrink: true }}
             fullWidth
+          />
+
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={!!form.payments_enabled}
+                onChange={e => setForm({ ...form, payments_enabled: e.target.checked })}
+              />
+            }
+            label='Require payment for this activity'
           />
         </DialogContent>
         <DialogActions>

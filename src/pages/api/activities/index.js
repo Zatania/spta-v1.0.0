@@ -1,4 +1,3 @@
-// pages/api/activities/index.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]' // adjust path if needed
 import db from '../db' // adjust path to your db helper
@@ -10,7 +9,7 @@ import db from '../db' // adjust path to your db helper
  *   - Teachers see activities they created OR activities assigned to their sections (via activity_assignments)
  *
  * POST /api/activities
- *   body: { title, activity_date } - creates activity (created_by = session.user.id)
+ *   body: { title, activity_date, payments_enabled } - creates activity (created_by = session.user.id)
  *   role: admin or teacher allowed (teachers will appear as creator)
  */
 export default async function handler(req, res) {
@@ -55,7 +54,12 @@ export default async function handler(req, res) {
       const total = countRows[0]?.total ?? 0
 
       const sql = `
-        SELECT a.id, a.title, DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date, a.created_by, u.full_name AS created_by_name
+        SELECT a.id,
+               a.title,
+               DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
+               a.created_by,
+               COALESCE(a.payments_enabled, 1) AS payments_enabled,
+               u.full_name AS created_by_name
         FROM activities a
         LEFT JOIN users u ON u.id = a.created_by
         ${whereSql}
@@ -65,23 +69,32 @@ export default async function handler(req, res) {
       const finalParams = [...params, limit, offset]
       const [rows] = await db.query(sql, finalParams)
 
-      return res.status(200).json({ total, page: Number(page), page_size: limit, activities: rows })
+      // normalize payments_enabled to boolean-like 0/1
+      const normalized = rows.map(r => ({ ...r, payments_enabled: !!Number(r.payments_enabled) }))
+
+      return res.status(200).json({ total, page: Number(page), page_size: limit, activities: normalized })
     }
 
     if (req.method === 'POST') {
-      const { title, activity_date } = req.body
+      const { title, activity_date, payments_enabled } = req.body
       if (!title || !activity_date) return res.status(400).json({ message: 'title and activity_date are required' })
 
+      const paymentsVal = typeof payments_enabled === 'undefined' ? 1 : payments_enabled ? 1 : 0
+
       const [ins] = await db.query(
-        'INSERT INTO activities (title, activity_date, created_by, is_deleted, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
-        [title, activity_date, session.user.id]
+        'INSERT INTO activities (title, activity_date, created_by, payments_enabled, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, 0, NOW(), NOW())',
+        [title, activity_date, session.user.id, paymentsVal]
       )
       const activityId = ins.insertId
 
       const [activityRows] = await db.query(
-        'SELECT id, title, activity_date, created_by FROM activities WHERE id = ? LIMIT 1',
+        'SELECT id, title, DATE_FORMAT(activity_date, "%Y-%m-%d") AS activity_date, created_by, COALESCE(payments_enabled,1) AS payments_enabled FROM activities WHERE id = ? LIMIT 1',
         [activityId]
       )
+
+      if (activityRows[0]) {
+        activityRows[0].payments_enabled = !!Number(activityRows[0].payments_enabled)
+      }
 
       return res.status(201).json({ activity: activityRows[0] })
     }

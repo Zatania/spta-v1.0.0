@@ -20,10 +20,17 @@ import {
   Chip,
   Breadcrumbs,
   Link,
-  InputAdornment
+  InputAdornment,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  IconButton
 } from '@mui/material'
 import { AbilityContext } from 'src/layouts/components/acl/Can'
 import UserDetails from 'src/views/pages/dashboard/UserDetails'
+import CloseIcon from '@mui/icons-material/Close'
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import axios from 'axios'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend } from 'recharts'
 import GetAppIcon from '@mui/icons-material/GetApp'
@@ -133,6 +140,14 @@ const Dashboard = () => {
   const [loadingActivitiesStudents, setLoadingActivitiesStudents] = useState(false)
   const [errorActivitiesOverview, setErrorActivitiesOverview] = useState(null)
   const activitiesRef = useRef(null)
+
+  //PDF
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState('')
+  const [pdfPreviewStudent, setPdfPreviewStudent] = useState(null)
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfError, setPdfError] = useState('')
+  const [previewEndpoint, setPreviewEndpoint] = useState('')
 
   // ---------- Fetchers ----------
   const fetchOverview = async () => {
@@ -1317,7 +1332,6 @@ const Dashboard = () => {
                                       <TableCell align='center'>Student Present</TableCell>
                                       <TableCell align='right'>Payment</TableCell>
                                       <TableCell>Payment Date</TableCell>
-                                      <TableCell align='center'>Form</TableCell>
                                     </TableRow>
                                   </TableHead>
                                   <TableBody>
@@ -1351,15 +1365,6 @@ const Dashboard = () => {
                                           {student.payment_date
                                             ? new Date(student.payment_date).toLocaleDateString()
                                             : '—'}
-                                        </TableCell>
-                                        <TableCell align='center'>
-                                          <Button
-                                            size='small'
-                                            onClick={() => handleActivitiesDownloadForm(student)}
-                                            variant='outlined'
-                                          >
-                                            Download
-                                          </Button>
                                         </TableCell>
                                       </TableRow>
                                     ))}
@@ -1794,6 +1799,7 @@ const Dashboard = () => {
                     <TableCell align='center'>Parent Present</TableCell>
                     <TableCell align='center'>Payment</TableCell>
                     <TableCell>Payment Date</TableCell>
+                    <TableCell align='center'>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1834,6 +1840,19 @@ const Dashboard = () => {
                       <TableCell>
                         {student.payment_date ? new Date(student.payment_date).toLocaleDateString() : '—'}
                       </TableCell>
+                      <TableCell align='center'>
+                        <Stack direction='row' spacing={1}>
+                          <Button
+                            size='small'
+                            startIcon={<VisibilityIcon />}
+                            onClick={() => handlePreviewForm(student)}
+                            variant='outlined'
+                            color='primary'
+                          >
+                            Preview
+                          </Button>
+                        </Stack>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1853,6 +1872,187 @@ const Dashboard = () => {
         )}
       </CardContent>
     </Card>
+  )
+
+  // PDF Functions
+  const handlePreviewForm = async student => {
+    if (!student) return
+
+    setPdfPreviewStudent(student)
+    setPdfPreviewUrl('')
+    setPdfError('')
+    setPdfLoading(true)
+    setPdfPreviewOpen(true)
+
+    const sy = inferSchoolYear()
+
+    const url = `/api/teacher/forms/parent-checklist?student_id=${student.student_id}&school_year=${encodeURIComponent(
+      sy
+    )}&preview=true`
+    setPreviewEndpoint(url)
+
+    try {
+      const resp = await axios.get(url, { responseType: 'blob', withCredentials: true })
+
+      console.log('preview response status (axios):', resp.status)
+      console.log(
+        'preview response content-type:',
+        resp.headers && (resp.headers['content-type'] || resp.headers['Content-Type'])
+      )
+
+      if (!resp || !resp.data) {
+        throw new Error('No data received from preview endpoint')
+      }
+
+      const blob = resp.data
+
+      // Read first bytes to check file signature
+      const ab = await blob.arrayBuffer()
+      const headerBytes = new Uint8Array(ab).slice(0, 8)
+      let headerStr = ''
+      try {
+        headerStr = new TextDecoder().decode(headerBytes)
+      } catch (e) {
+        headerStr = ''
+      }
+      console.log('preview blob header (first 8 chars):', headerStr)
+
+      // PDFs start with "%PDF-"
+      if (!headerStr.startsWith('%PDF')) {
+        let bodyText = ''
+        try {
+          bodyText = new TextDecoder().decode(new Uint8Array(ab).slice(0, 2000))
+        } catch (e) {
+          bodyText = '<could not decode response text>'
+        }
+        console.warn('Preview endpoint returned non-PDF payload:', bodyText.slice(0, 1000))
+        setPdfError(
+          `Preview did not return a valid PDF. Server returned something else (first 1000 chars):\n\n${bodyText.slice(
+            0,
+            1000
+          )}`
+        )
+
+        return
+      }
+
+      // Valid PDF header — create a new blob from the buffer and show
+      const validPdfBlob = new Blob([ab], { type: 'application/pdf' })
+      const blobUrl = URL.createObjectURL(validPdfBlob)
+      setPdfPreviewUrl(blobUrl)
+    } catch (err) {
+      console.error('Error generating form preview:', err)
+
+      const serverMsg =
+        err?.response?.data && typeof err.response.data === 'string'
+          ? err.response.data
+          : err?.message || JSON.stringify(err?.response || err) || 'Failed to generate preview'
+      setPdfError(serverMsg)
+    } finally {
+      setPdfLoading(false)
+    }
+  }
+
+  const handleDownloadFromPreview = () => {
+    if (!pdfPreviewUrl || !pdfPreviewStudent) return
+
+    const a = document.createElement('a')
+
+    const filename =
+      `SPTA_Checklist_${pdfPreviewStudent.last_name}_${pdfPreviewStudent.first_name}_${pdfPreviewStudent.grade_name}_${pdfPreviewStudent.section_name}.pdf`.replace(
+        /\s+/g,
+        '_'
+      )
+
+    a.href = pdfPreviewUrl
+    a.download = filename
+    a.click()
+  }
+
+  const handleClosePreview = () => {
+    if (pdfPreviewUrl) {
+      URL.revokeObjectURL(pdfPreviewUrl)
+    }
+    setPdfPreviewOpen(false)
+    setPdfPreviewUrl('')
+    setPdfPreviewStudent(null)
+    setPdfLoading(false)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (pdfPreviewUrl) {
+        try {
+          URL.revokeObjectURL(pdfPreviewUrl)
+        } catch (e) {}
+      }
+    }
+  }, [pdfPreviewUrl])
+
+  // Dialog
+  const renderPdfPreviewDialog = () => (
+    <Dialog
+      open={pdfPreviewOpen}
+      onClose={handleClosePreview}
+      fullWidth
+      maxWidth='lg'
+      aria-labelledby='pdf-preview-title'
+    >
+      <DialogTitle
+        id='pdf-preview-title'
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+      >
+        <span>Form Preview</span>
+        <IconButton edge='end' onClick={handleClosePreview}>
+          <CloseIcon />
+        </IconButton>
+      </DialogTitle>
+
+      <DialogContent dividers sx={{ minHeight: 240 }}>
+        {pdfLoading ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : pdfError ? (
+          <Box sx={{ p: 2 }}>
+            <Typography color='error' sx={{ whiteSpace: 'pre-wrap', mb: 1 }}>
+              {pdfError}
+            </Typography>
+            <Typography variant='body2' sx={{ mb: 1 }}>
+              Tip: open the preview endpoint directly in a new tab to inspect the server response.
+            </Typography>
+            <Stack direction='row' spacing={1}>
+              <Button onClick={() => previewEndpoint && window.open(previewEndpoint, '_blank')} variant='outlined'>
+                Open endpoint in new tab
+              </Button>
+              <Button onClick={handleClosePreview} variant='contained'>
+                Close
+              </Button>
+            </Stack>
+          </Box>
+        ) : pdfPreviewUrl ? (
+          <iframe src={pdfPreviewUrl} style={{ width: '100%', height: '70vh', border: 'none' }} title='PDF Preview' />
+        ) : (
+          <Box sx={{ p: 2 }}>
+            <Typography>No preview available.</Typography>
+          </Box>
+        )}
+      </DialogContent>
+
+      <DialogActions>
+        <Button onClick={handleClosePreview} variant='outlined'>
+          Close
+        </Button>
+        <Button
+          onClick={handleDownloadFromPreview}
+          variant='contained'
+          disabled={!pdfPreviewUrl || pdfLoading}
+          startIcon={<PictureAsPdfIcon />}
+        >
+          Download
+        </Button>
+      </DialogActions>
+    </Dialog>
   )
 
   // ---------- UI ----------
@@ -1921,6 +2121,7 @@ const Dashboard = () => {
         {currentView === VIEW_TYPES.ACTIVITIES && renderActivities()}
         {currentView === VIEW_TYPES.STUDENTS && renderStudents()}
       </Grid>
+      {renderPdfPreviewDialog()}
     </Grid>
   )
 }

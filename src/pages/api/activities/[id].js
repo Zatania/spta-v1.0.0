@@ -47,7 +47,7 @@ export default async function handler(req, res) {
       if (!aRows.length) return res.status(404).json({ message: 'Activity not found' })
 
       const activity = aRows[0]
-      if (session.user.role !== 'admin' && activity.created_by !== session.user.id) {
+      if (session.user.role !== 'admin' && Number(activity.created_by) !== Number(session.user.id)) {
         return res.status(403).json({ message: 'Forbidden' })
       }
 
@@ -87,7 +87,7 @@ export default async function handler(req, res) {
       const [aRows] = await db.query('SELECT * FROM activities WHERE id = ? AND is_deleted = 0 LIMIT 1', [activityId])
       if (!aRows.length) return res.status(404).json({ message: 'Activity not found' })
       const activity = aRows[0]
-      if (session.user.role !== 'admin' && activity.created_by !== session.user.id) {
+      if (session.user.role !== 'admin' && Number(activity.created_by) !== Number(session.user.id)) {
         return res.status(403).json({ message: 'Forbidden' })
       }
 

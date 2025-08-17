@@ -620,17 +620,17 @@ export default function TeacherDashboard() {
                             {student.parents || 'No parents listed'}
                           </Typography>
                         </TableCell>
-                        <TableCell>
-                          <Stack direction='row' spacing={1}>
-                            <Button
-                              size='small'
-                              startIcon={<VisibilityIcon />}
-                              onClick={() => handlePreviewForm(student)}
-                              variant='outlined'
-                              color='primary'
-                            >
-                              Preview
-                            </Button>
+                        <TableCell align='center'>
+                          <Button
+                            size='small'
+                            startIcon={<VisibilityIcon />}
+                            onClick={() => handlePreviewForm(student)}
+                            variant='outlined'
+                            color='primary'
+                          >
+                            Preview
+                          </Button>
+                          {/* <Stack direction='row' spacing={1}>
                             <Button
                               size='small'
                               startIcon={<DownloadIcon />}
@@ -640,7 +640,7 @@ export default function TeacherDashboard() {
                             >
                               Download
                             </Button>
-                          </Stack>
+                          </Stack> */}
                         </TableCell>
                       </TableRow>
                     ))}

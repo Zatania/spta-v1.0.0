@@ -114,8 +114,11 @@ export default async function handler(req, res) {
         const activityIds = activities.map(a => a.id)
 
         if (activityIds.length > 0) {
-          // 2a. Delete assignments linked to those activities
-          await conn.query('DELETE FROM activity_assignments WHERE activity_id IN (?)', [activityIds])
+          // 2a. Soft delete assignments linked to those activities
+          await conn.query(
+            'UPDATE activity_assignments SET is_deleted = 1, deleted_at = NOW() WHERE activity_id IN (?)',
+            [activityIds]
+          )
 
           // 2b. Soft delete the activities
           await conn.query('UPDATE activities SET is_deleted = 1, deleted_at = NOW() WHERE id IN (?)', [activityIds])

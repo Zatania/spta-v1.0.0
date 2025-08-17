@@ -318,6 +318,120 @@ export default async function handler(req, res) {
       return res.status(200).json({ payments_by_section: rows ?? [] })
     }
 
+    // ---------- ACTIVITIES OVERVIEW (BY GRADE) ----------
+    if (view === 'activitiesOverview') {
+      const [rows] = await db.query(
+        `
+        SELECT
+          aa.grade_id,
+          g.name AS grade_name,
+          SUM(att.status = 'present') AS present_count,
+          SUM(att.status = 'absent') AS absent_count,
+          SUM(att.parent_present = 1) AS parent_present_count
+        FROM attendance att
+        JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
+        JOIN activities a ON a.id = aa.activity_id
+        JOIN grades g ON g.id = aa.grade_id
+        WHERE a.is_deleted = 0 ${dateWhereA}
+        GROUP BY aa.grade_id, g.name
+        ORDER BY aa.grade_id
+        `,
+        dateParams
+      )
+
+      return res.status(200).json({ activities_by_grade: rows ?? [] })
+    }
+
+    // ---------- ACTIVITIES BY GRADE (SECTIONS) ----------
+    if (view === 'activitiesByGrade') {
+      if (!grade_id) {
+        return res.status(400).json({ message: 'grade_id is required for view=activitiesByGrade' })
+      }
+
+      const [rows] = await db.query(
+        `
+        SELECT
+          aa.section_id,
+          s.name AS section_name,
+          SUM(att.status = 'present') AS present_count,
+          SUM(att.status = 'absent') AS absent_count,
+          SUM(att.parent_present = 1) AS parent_present_count
+        FROM attendance att
+        JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
+        JOIN activities a ON a.id = aa.activity_id
+        JOIN sections s ON s.id = aa.section_id
+        WHERE a.is_deleted = 0 AND aa.grade_id = ? ${dateWhereA}
+        GROUP BY aa.section_id, s.name
+        ORDER BY s.name
+        `,
+        [grade_id, ...dateParams]
+      )
+
+      return res.status(200).json({ activities_by_section: rows ?? [] })
+    }
+
+    // ---------- ACTIVITIES BY SECTION (INDIVIDUAL ACTIVITIES) ----------
+    if (view === 'activitiesBySection') {
+      if (!section_id) {
+        return res.status(400).json({ message: 'section_id is required for view=activitiesBySection' })
+      }
+
+      const [activities] = await db.query(
+        `
+          SELECT DISTINCT
+            a.id,
+            a.title,
+            a.activity_date
+          FROM activities a
+          JOIN activity_assignments aa ON aa.activity_id = a.id
+          WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhereA}
+          ORDER BY a.activity_date DESC
+          `,
+        [section_id, ...dateParams]
+      )
+
+      const activitySummaries = []
+      for (const act of activities) {
+        const [attRows] = await db.query(
+          `
+          SELECT
+            SUM(att.status = 'present') AS present_count,
+            SUM(att.status = 'absent') AS absent_count,
+            SUM(att.parent_present = 1) AS parent_present_count
+          FROM attendance att
+          JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
+          WHERE aa.activity_id = ? AND aa.section_id = ?
+          `,
+          [act.id, section_id]
+        )
+
+        const [payRows] = await db.query(
+          `
+          SELECT
+            SUM(p.paid = 1) AS paid_count,
+            SUM(p.paid = 0) AS unpaid_count
+          FROM payments p
+          JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
+          WHERE aa.activity_id = ? AND aa.section_id = ?
+          `,
+          [act.id, section_id]
+        )
+
+        activitySummaries.push({
+          id: act.id,
+          title: act.title,
+          activity_date: act.activity_date,
+          present_count: attRows[0]?.present_count || 0,
+          absent_count: attRows[0]?.absent_count || 0,
+          parent_present_count: attRows[0]?.parent_present_count || 0,
+          paid_count: payRows[0]?.paid_count || 0,
+          unpaid_count: payRows[0]?.unpaid_count || 0
+        })
+      }
+
+      return res.status(200).json({ section_activities: activitySummaries })
+    }
+
     return res.status(400).json({ message: 'Invalid view parameter' })
   } catch (err) {
     console.error('Summary API error:', err)

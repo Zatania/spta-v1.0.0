@@ -1,4 +1,4 @@
-// src/pages/index.js
+// src/pages/dashboard/index.js
 import { useState, useEffect, useContext, useMemo, useRef } from 'react'
 import {
   Grid,
@@ -116,6 +116,23 @@ const Dashboard = () => {
   const [paymentsBySection, setPaymentsBySection] = useState([])
   const [errorPayments, setErrorPayments] = useState(null)
   const [paymentsGradeSelected, setPaymentsGradeSelected] = useState(null)
+
+  // Activities overview states
+  const [activitiesLevel, setActivitiesLevel] = useState('overview') // 'overview', 'byGrade', 'bySection', 'sectionActivities'
+  const [activitiesOverviewData, setActivitiesOverviewData] = useState([])
+  const [activitiesByGrade, setActivitiesByGrade] = useState([])
+  const [activitiesBySection, setActivitiesBySection] = useState([])
+  const [activitiesSectionActivities, setActivitiesSectionActivities] = useState([])
+  const [activitiesSelectedGrade, setActivitiesSelectedGrade] = useState(null)
+  const [activitiesSelectedSection, setActivitiesSelectedSection] = useState(null)
+  const [activitiesSelectedActivity, setActivitiesSelectedActivity] = useState(null)
+  const [activitiesStudents, setActivitiesStudents] = useState([])
+  const [loadingActivitiesOverview, setLoadingActivitiesOverview] = useState(false)
+  const [loadingActivitiesByGrade, setLoadingActivitiesByGrade] = useState(false)
+  const [loadingActivitiesBySection, setLoadingActivitiesBySection] = useState(false)
+  const [loadingActivitiesStudents, setLoadingActivitiesStudents] = useState(false)
+  const [errorActivitiesOverview, setErrorActivitiesOverview] = useState(null)
+  const activitiesRef = useRef(null)
 
   // ---------- Fetchers ----------
   const fetchOverview = async () => {
@@ -278,6 +295,91 @@ const Dashboard = () => {
     }
   }
 
+  const fetchActivitiesOverview = async () => {
+    setLoadingActivitiesOverview(true)
+    setErrorActivitiesOverview(null)
+    try {
+      const res = await axios.get('/api/summary', {
+        params: {
+          view: 'activitiesOverview',
+          from_date: fromDate || undefined,
+          to_date: toDate || undefined
+        }
+      })
+      setActivitiesOverviewData(res.data.activities_by_grade ?? [])
+      setActivitiesLevel('overview')
+    } catch (err) {
+      setErrorActivitiesOverview(err?.response?.data?.message ?? 'Failed to load activities overview')
+    } finally {
+      setLoadingActivitiesOverview(false)
+    }
+  }
+
+  const fetchActivitiesByGrade = async gradeId => {
+    if (!gradeId) return
+    setLoadingActivitiesByGrade(true)
+    setErrorActivitiesOverview(null)
+    try {
+      const res = await axios.get('/api/summary', {
+        params: {
+          view: 'activitiesByGrade',
+          grade_id: gradeId,
+          from_date: fromDate || undefined,
+          to_date: toDate || undefined
+        }
+      })
+      setActivitiesByGrade(res.data.activities_by_section ?? [])
+      setActivitiesLevel('byGrade')
+    } catch (err) {
+      setErrorActivitiesOverview(err?.response?.data?.message ?? 'Failed to load activities by grade')
+    } finally {
+      setLoadingActivitiesByGrade(false)
+    }
+  }
+
+  const fetchActivitiesBySection = async sectionId => {
+    if (!sectionId) return
+    setLoadingActivitiesBySection(true)
+    setErrorActivitiesOverview(null)
+    try {
+      const res = await axios.get('/api/summary', {
+        params: {
+          view: 'activitiesBySection',
+          section_id: sectionId,
+          from_date: fromDate || undefined,
+          to_date: toDate || undefined
+        }
+      })
+      setActivitiesSectionActivities(res.data.section_activities ?? [])
+      setActivitiesLevel('sectionActivities')
+    } catch (err) {
+      setErrorActivitiesOverview(err?.response?.data?.message ?? 'Failed to load section activities')
+    } finally {
+      setLoadingActivitiesBySection(false)
+    }
+  }
+
+  const fetchActivitiesStudents = async (activityId, sectionId) => {
+    if (!activityId || !sectionId) return
+    setLoadingActivitiesStudents(true)
+    setErrorActivitiesOverview(null)
+    try {
+      const res = await axios.get('/api/activities/students', {
+        params: {
+          activity_id: activityId,
+          section_id: sectionId,
+          page: 1,
+          page_size: 1000
+        }
+      })
+      setActivitiesStudents(res.data.students ?? [])
+    } catch (err) {
+      setErrorActivitiesOverview(err?.response?.data?.message ?? 'Failed to load activity students')
+    } finally {
+      setLoadingActivitiesStudents(false)
+    }
+  }
+
   // Navigation handlers
   const handleGradeClick = grade => {
     setSelectedGrade(grade)
@@ -318,6 +420,16 @@ const Dashboard = () => {
     setPaymentsByGrade([])
     setPaymentsBySection([])
     setPaymentsGradeSelected(null)
+
+    // ADD THESE LINES FOR ACTIVITIES RESET
+    setActivitiesLevel('overview')
+    setActivitiesSelectedGrade(null)
+    setActivitiesSelectedSection(null)
+    setActivitiesSelectedActivity(null)
+    setActivitiesByGrade([])
+    setActivitiesBySection([])
+    setActivitiesSectionActivities([])
+    setActivitiesStudents([])
   }
 
   // payments controls invoked when admin clicks the "Total Paid" card
@@ -376,6 +488,115 @@ const Dashboard = () => {
     setStudentsSearch(value)
     setStudentsPage(1)
     fetchActivityStudents(selectedActivity.id, selectedSection.section_id, 1, studentsPageSize, value)
+  }
+
+  const handleActivitiesOverviewGradeClick = grade => {
+    setActivitiesSelectedGrade(grade)
+    fetchActivitiesByGrade(grade.grade_id ?? grade.id)
+    if (activitiesRef.current) {
+      activitiesRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
+  const handleActivitiesSectionClick = section => {
+    setActivitiesSelectedSection(section)
+    fetchActivitiesBySection(section.section_id ?? section.id)
+    if (activitiesRef.current) {
+      activitiesRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
+  const handleActivitiesActivityClick = activity => {
+    setActivitiesSelectedActivity(activity)
+    fetchActivitiesStudents(activity.id, activitiesSelectedSection.section_id ?? activitiesSelectedSection.id)
+  }
+
+  const handleActivitiesBack = () => {
+    if (activitiesLevel === 'sectionActivities') {
+      setActivitiesLevel('byGrade')
+      setActivitiesSelectedActivity(null)
+      setActivitiesStudents([])
+    } else if (activitiesLevel === 'byGrade') {
+      setActivitiesLevel('overview')
+      setActivitiesSelectedGrade(null)
+      setActivitiesByGrade([])
+    }
+  }
+
+  const handleActivitiesDownloadForm = async student => {
+    try {
+      console.log(
+        'Download form clicked — student:',
+        student,
+        'activitiesSelectedActivity:',
+        activitiesSelectedActivity
+      )
+
+      if (!student) {
+        console.error('handleActivitiesDownloadForm: student is falsy')
+        alert('Student data missing. Check console for details.')
+
+        return
+      }
+
+      const studentId = student.id ?? student.student_id ?? student.studentId
+      if (!studentId) {
+        console.error('handleActivitiesDownloadForm: no student id found on object. Keys:', Object.keys(student))
+        alert('Student id missing — check console for details.')
+
+        return
+      }
+
+      const sy = inferSchoolYear()
+
+      // include activity_id only when present; admin downloads will omit it
+      const activityPart =
+        activitiesSelectedActivity && activitiesSelectedActivity.id
+          ? `&activity_id=${encodeURIComponent(activitiesSelectedActivity.id)}`
+          : ''
+
+      const url = `/api/teacher/forms/parent-checklist?student_id=${encodeURIComponent(
+        studentId
+      )}&school_year=${encodeURIComponent(sy)}${activityPart}`
+
+      console.log('Requesting PDF from:', url)
+      const resp = await fetch(url, { method: 'GET' })
+
+      if (!resp.ok) {
+        let text = '<empty response>'
+        try {
+          text = await resp.text()
+        } catch (e) {
+          /* ignore */
+        }
+        console.error('Failed to generate form', resp.status, text)
+        alert(`Failed to generate form (status ${resp.status}). See console for details.`)
+
+        return
+      }
+
+      const blob = await resp.blob()
+      const a = document.createElement('a')
+
+      const filename = `SPTA_Checklist_${student.last_name ?? 'lastname'}_${student.first_name ?? 'firstname'}_${
+        student.grade_name ?? 'grade'
+      }_${student.section_name ?? 'section'}.pdf`.replace(/\s+/g, '_')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (error) {
+      console.error('Error downloading form:', error)
+      alert('Error downloading form — check console for details.')
+    }
+  }
+
+  const openActivitiesSection = () => {
+    setActivitiesLevel('overview')
+    fetchActivitiesOverview()
+    if (activitiesRef.current) {
+      activitiesRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
   }
 
   // export functions
@@ -439,6 +660,7 @@ const Dashboard = () => {
   useEffect(() => {
     fetchOverview()
     fetchByGrade()
+    fetchActivitiesOverview() // Add this line
   }, [fromDate, toDate])
 
   // when gradeSections are loaded for a selected grade, scroll to the sections area
@@ -775,6 +997,390 @@ const Dashboard = () => {
     )
   }
 
+  const renderActivitiesOverview = () => {
+    const attendanceColors = {
+      Present: '#7BC043',
+      Absent: '#F26419'
+    }
+
+    return (
+      <Box ref={activitiesRef} sx={{ mt: 3 }}>
+        <Card>
+          <CardContent>
+            <Box display='flex' justifyContent='space-between' alignItems='center' sx={{ mb: 2 }}>
+              <Box>
+                <Typography variant='h6'>Activities Attendance Overview</Typography>
+                <Typography variant='body2' color='text.secondary'>
+                  Click the chart to drill-down by grade, then by section, then by activity.
+                </Typography>
+              </Box>
+
+              <Box>
+                {activitiesLevel !== 'overview' && (
+                  <Button startIcon={<ArrowBackIcon />} onClick={handleActivitiesBack} sx={{ mr: 1 }}>
+                    Back
+                  </Button>
+                )}
+                <Button
+                  size='small'
+                  startIcon={<GetAppIcon />}
+                  onClick={() => {
+                    if (activitiesLevel === 'overview') {
+                      exportTableToCSV(
+                        activitiesOverviewData.map(g => ({
+                          grade: g.grade_name,
+                          present: g.present_count || 0,
+                          absent: g.absent_count || 0
+                        })),
+                        'activities_overview.csv'
+                      )
+                    } else if (activitiesLevel === 'byGrade') {
+                      exportTableToCSV(
+                        activitiesByGrade.map(s => ({
+                          section: s.section_name,
+                          present: s.present_count || 0,
+                          absent: s.absent_count || 0
+                        })),
+                        'activities_by_section.csv'
+                      )
+                    } else if (activitiesLevel === 'sectionActivities') {
+                      exportTableToCSV(
+                        activitiesSectionActivities.map(a => ({
+                          activity: a.title,
+                          date: a.activity_date,
+                          present: a.present_count || 0,
+                          absent: a.absent_count || 0
+                        })),
+                        'section_activities.csv'
+                      )
+                    }
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Box>
+            </Box>
+
+            {/* Level: Overview (by grade) */}
+            {activitiesLevel === 'overview' && (
+              <>
+                {loadingActivitiesOverview ? (
+                  <Box display='flex' justifyContent='center' p={4}>
+                    <CircularProgress />
+                  </Box>
+                ) : errorActivitiesOverview ? (
+                  <Alert severity='error'>{errorActivitiesOverview}</Alert>
+                ) : activitiesOverviewData.length === 0 ? (
+                  <Alert severity='info'>No activities data found for the selected date range.</Alert>
+                ) : (
+                  <>
+                    <Box height={320}>
+                      <ResponsiveContainer width='100%' height='100%'>
+                        <BarChart data={activitiesOverviewData} margin={{ top: 20, right: 20, left: 10, bottom: 60 }}>
+                          <XAxis dataKey='grade_name' interval={0} angle={-40} textAnchor='end' height={80} />
+                          <YAxis allowDecimals={false} />
+                          <Tooltip />
+                          <Legend />
+                          <Bar
+                            dataKey='present_count'
+                            name='Present'
+                            fill={attendanceColors.Present}
+                            onClick={data => handleActivitiesOverviewGradeClick(data.payload)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {activitiesOverviewData.map((g, i) => (
+                              <Cell key={`present-${i}`} fill={attendanceColors['Present']} />
+                            ))}
+                          </Bar>
+                          <Bar dataKey='absent_count' name='Absent' fill={attendanceColors.Absent}>
+                            {activitiesOverviewData.map((g, i) => (
+                              <Cell key={`absent-${i}`} fill={attendanceColors['Absent']} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Box>
+
+                    <Divider sx={{ my: 2 }} />
+
+                    <Box sx={{ maxHeight: 260, overflow: 'auto' }}>
+                      <Table size='small'>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Grade</TableCell>
+                            <TableCell align='right'>Present</TableCell>
+                            <TableCell align='right'>Absent</TableCell>
+                            <TableCell align='right'>Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {activitiesOverviewData.map(g => (
+                            <TableRow key={g.grade_id} hover>
+                              <TableCell>{g.grade_name}</TableCell>
+                              <TableCell align='right'>{g.present_count ?? 0}</TableCell>
+                              <TableCell align='right'>{g.absent_count ?? 0}</TableCell>
+                              <TableCell align='right'>
+                                <Button size='small' onClick={() => handleActivitiesOverviewGradeClick(g)}>
+                                  View Sections
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  </>
+                )}
+              </>
+            )}
+
+            {/* Level: By Grade (sections) */}
+            {activitiesLevel === 'byGrade' && (
+              <>
+                {loadingActivitiesByGrade ? (
+                  <Box display='flex' justifyContent='center' p={4}>
+                    <CircularProgress />
+                  </Box>
+                ) : errorActivitiesOverview ? (
+                  <Alert severity='error'>{errorActivitiesOverview}</Alert>
+                ) : activitiesByGrade.length === 0 ? (
+                  <Alert severity='info'>No activities data found for sections in this grade/date range.</Alert>
+                ) : (
+                  <>
+                    <Typography variant='subtitle1' sx={{ mb: 2 }}>
+                      Activities Attendance for {activitiesSelectedGrade?.grade_name}
+                    </Typography>
+                    <Box height={320}>
+                      <ResponsiveContainer width='100%' height='100%'>
+                        <BarChart data={activitiesByGrade} margin={{ top: 20, right: 20, left: 10, bottom: 60 }}>
+                          <XAxis dataKey='section_name' interval={0} angle={-40} textAnchor='end' height={80} />
+                          <YAxis allowDecimals={false} />
+                          <Tooltip />
+                          <Legend />
+                          <Bar
+                            dataKey='present_count'
+                            name='Present'
+                            fill={attendanceColors.Present}
+                            onClick={data => handleActivitiesSectionClick(data.payload)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {activitiesByGrade.map((s, i) => (
+                              <Cell key={`sec-present-${i}`} fill={attendanceColors['Present']} />
+                            ))}
+                          </Bar>
+                          <Bar dataKey='absent_count' name='Absent' fill={attendanceColors.Absent}>
+                            {activitiesByGrade.map((s, i) => (
+                              <Cell key={`sec-absent-${i}`} fill={attendanceColors['Absent']} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Box>
+
+                    <Divider sx={{ my: 2 }} />
+
+                    <Box sx={{ maxHeight: 260, overflow: 'auto' }}>
+                      <Table size='small'>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Section</TableCell>
+                            <TableCell align='right'>Present</TableCell>
+                            <TableCell align='right'>Absent</TableCell>
+                            <TableCell align='right'>Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {activitiesByGrade.map(s => (
+                            <TableRow key={s.section_id} hover>
+                              <TableCell>{s.section_name}</TableCell>
+                              <TableCell align='right'>{s.present_count ?? 0}</TableCell>
+                              <TableCell align='right'>{s.absent_count ?? 0}</TableCell>
+                              <TableCell align='right'>
+                                <Button size='small' onClick={() => handleActivitiesSectionClick(s)}>
+                                  View Activities
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  </>
+                )}
+              </>
+            )}
+
+            {/* Level: Section Activities */}
+            {activitiesLevel === 'sectionActivities' && (
+              <>
+                {loadingActivitiesBySection ? (
+                  <Box display='flex' justifyContent='center' p={4}>
+                    <CircularProgress />
+                  </Box>
+                ) : errorActivitiesOverview ? (
+                  <Alert severity='error'>{errorActivitiesOverview}</Alert>
+                ) : activitiesSectionActivities.length === 0 ? (
+                  <Alert severity='info'>No activities found for this section/date range.</Alert>
+                ) : (
+                  <>
+                    <Typography variant='subtitle1' sx={{ mb: 2 }}>
+                      Activities for {activitiesSelectedGrade?.grade_name} - {activitiesSelectedSection?.section_name}
+                    </Typography>
+                    <Box height={320}>
+                      <ResponsiveContainer width='100%' height='100%'>
+                        <BarChart
+                          data={activitiesSectionActivities}
+                          margin={{ top: 20, right: 20, left: 10, bottom: 60 }}
+                        >
+                          <XAxis dataKey='title' interval={0} angle={-40} textAnchor='end' height={80} />
+                          <YAxis allowDecimals={false} />
+                          <Tooltip />
+                          <Legend />
+                          <Bar
+                            dataKey='present_count'
+                            name='Present'
+                            fill={attendanceColors.Present}
+                            onClick={data => handleActivitiesActivityClick(data.payload)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {activitiesSectionActivities.map((a, i) => (
+                              <Cell key={`act-present-${i}`} fill={attendanceColors['Present']} />
+                            ))}
+                          </Bar>
+                          <Bar dataKey='absent_count' name='Absent' fill={attendanceColors.Absent}>
+                            {activitiesSectionActivities.map((a, i) => (
+                              <Cell key={`act-absent-${i}`} fill={attendanceColors['Absent']} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Box>
+
+                    <Divider sx={{ my: 2 }} />
+
+                    <Box sx={{ maxHeight: 260, overflow: 'auto' }}>
+                      <Table size='small'>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Activity</TableCell>
+                            <TableCell>Date</TableCell>
+                            <TableCell align='right'>Present</TableCell>
+                            <TableCell align='right'>Absent</TableCell>
+                            <TableCell align='right'>Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {activitiesSectionActivities.map(a => (
+                            <TableRow key={a.id} hover>
+                              <TableCell>{a.title}</TableCell>
+                              <TableCell>{a.activity_date}</TableCell>
+                              <TableCell align='right'>{a.present_count ?? 0}</TableCell>
+                              <TableCell align='right'>{a.absent_count ?? 0}</TableCell>
+                              <TableCell align='right'>
+                                <Button size='small' onClick={() => handleActivitiesActivityClick(a)}>
+                                  View Students
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Box>
+
+                    {/* Students list when activity is selected */}
+                    {activitiesSelectedActivity && (
+                      <Box sx={{ mt: 3 }}>
+                        <Card variant='outlined'>
+                          <CardContent>
+                            <Typography variant='h6' sx={{ mb: 2 }}>
+                              Students - {activitiesSelectedActivity.title}
+                              <Chip label={activitiesSelectedActivity.activity_date} size='small' sx={{ ml: 2 }} />
+                            </Typography>
+
+                            {loadingActivitiesStudents ? (
+                              <Box display='flex' justifyContent='center' p={4}>
+                                <CircularProgress />
+                              </Box>
+                            ) : activitiesStudents.length === 0 ? (
+                              <Alert severity='info'>No students found for this activity.</Alert>
+                            ) : (
+                              <Box sx={{ maxHeight: 400, overflow: 'auto' }}>
+                                <Table size='small'>
+                                  <TableHead>
+                                    <TableRow>
+                                      <TableCell>LRN</TableCell>
+                                      <TableCell>Student Name</TableCell>
+                                      <TableCell>Parent Name</TableCell>
+                                      <TableCell>Grade</TableCell>
+                                      <TableCell>Section</TableCell>
+                                      <TableCell align='center'>Parent Present</TableCell>
+                                      <TableCell align='center'>Student Present</TableCell>
+                                      <TableCell align='right'>Payment</TableCell>
+                                      <TableCell>Payment Date</TableCell>
+                                      <TableCell align='center'>Form</TableCell>
+                                    </TableRow>
+                                  </TableHead>
+                                  <TableBody>
+                                    {activitiesStudents.map(student => (
+                                      <TableRow key={student.id} hover>
+                                        <TableCell>{student.lrn}</TableCell>
+                                        <TableCell>
+                                          {student.last_name}, {student.first_name}
+                                        </TableCell>
+                                        <TableCell>{student.parents || '—'}</TableCell>
+                                        <TableCell>{student.grade_name}</TableCell>
+                                        <TableCell>{student.section_name}</TableCell>
+                                        <TableCell align='center'>
+                                          <Chip
+                                            label={student.parent_present ? 'Yes' : 'No'}
+                                            color={student.parent_present ? 'success' : 'default'}
+                                            size='small'
+                                          />
+                                        </TableCell>
+                                        <TableCell align='center'>
+                                          <Chip
+                                            label={student.attendance_status === 'present' ? 'Yes' : 'No'}
+                                            color={student.attendance_status === 'present' ? 'success' : 'error'}
+                                            size='small'
+                                          />
+                                        </TableCell>
+                                        <TableCell align='right'>
+                                          {student.payment_amount ? `₱${student.payment_amount}` : '—'}
+                                        </TableCell>
+                                        <TableCell>
+                                          {student.payment_date
+                                            ? new Date(student.payment_date).toLocaleDateString()
+                                            : '—'}
+                                        </TableCell>
+                                        <TableCell align='center'>
+                                          <Button
+                                            size='small'
+                                            onClick={() => handleActivitiesDownloadForm(student)}
+                                            variant='outlined'
+                                          >
+                                            Download
+                                          </Button>
+                                        </TableCell>
+                                      </TableRow>
+                                    ))}
+                                  </TableBody>
+                                </Table>
+                              </Box>
+                            )}
+                          </CardContent>
+                        </Card>
+                      </Box>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </Box>
+    )
+  }
+
   // Render overview (grades chart)
   const renderOverview = () => (
     <>
@@ -790,14 +1396,17 @@ const Dashboard = () => {
             />
           </Grid>
         )}
+
         {ability?.can('read', 'total_activities') && (
           <Grid item xs={12} sm={6} md={2.4}>
-            <UserDetails
-              icon='mdi:calendar-check'
-              color='primary'
-              count={loadingOverview ? <CircularProgress size={20} /> : overview?.total_activities ?? 0}
-              title='Total Activities'
-            />
+            <Box onClick={openActivitiesSection} sx={{ cursor: 'pointer' }}>
+              <UserDetails
+                icon='mdi:calendar-account'
+                color='info'
+                count={loadingOverview ? <CircularProgress size={20} /> : overview?.total_activities ?? 0}
+                title='Total Activities'
+              />
+            </Box>
           </Grid>
         )}
         {ability?.can('read', 'attendance') && (
@@ -1006,6 +1615,11 @@ const Dashboard = () => {
         {/* Payments Overview moved below the chart */}
         <Grid item xs={12} md={12}>
           {renderPayments()}
+        </Grid>
+
+        {/* Activities Overview Section */}
+        <Grid item xs={12} md={12}>
+          {renderActivitiesOverview()}
         </Grid>
       </Grid>
     </>
@@ -1309,6 +1923,14 @@ const Dashboard = () => {
       </Grid>
     </Grid>
   )
+}
+
+function inferSchoolYear(date = new Date()) {
+  const y = date.getFullYear()
+  const m = date.getMonth() + 1
+  if (m >= 6) return `${y}-${y + 1}`
+
+  return `${y - 1}-${y}`
 }
 
 Dashboard.acl = { action: 'read', subject: 'dashboard' }

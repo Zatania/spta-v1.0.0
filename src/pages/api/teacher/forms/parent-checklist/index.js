@@ -6,20 +6,18 @@ import PDFDocument from 'pdfkit'
 import fs from 'fs'
 import path from 'path'
 
-/**
- * GET /api/teacher/forms/parent-checklist?student_id=...&school_year=YYYY-YYYY
- * - Embeds transparent PNG logos (if present)
- * - Aligns logos vertically to the center of the header text block
- * - Lists only activities created by the logged-in teacher assigned to the student's section
- * - Groups activities by date (desc) and adds a Signature column (Parent Present column removed)
- */
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
 
   const session = await getServerSession(req, res, authOptions)
-  if (!session || session.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' })
+  if (!session) return res.status(403).json({ message: 'Forbidden' })
 
-  const teacherId = session.user.id
+  const role = session.user.role
+  const isTeacher = role === 'teacher'
+  const isAdmin = role === 'admin'
+  if (!isTeacher && !isAdmin) return res.status(403).json({ message: 'Forbidden' })
+
+  const teacherId = isTeacher ? session.user.id : null
   const studentId = Number(req.query.student_id)
   const schoolYear = (req.query.school_year || '').trim()
 
@@ -42,12 +40,14 @@ export default async function handler(req, res) {
     const student = studentRows[0]
     if (!student) return res.status(404).json({ message: 'Student not found' })
 
-    // --- Permission: teacher must be assigned to the student's section ---
-    const [ownRows] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-      teacherId,
-      student.section_id
-    ])
-    if (!ownRows.length) return res.status(403).json({ message: 'Not allowed to generate form for this student' })
+    // --- Permission: if teacher, must be assigned to the student's section ---
+    if (isTeacher) {
+      const [ownRows] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
+        teacherId,
+        student.section_id
+      ])
+      if (!ownRows.length) return res.status(403).json({ message: 'Not allowed to generate form for this student' })
+    }
 
     // --- Parents ---
     const [parentRows] = await db.query(
@@ -59,11 +59,19 @@ export default async function handler(req, res) {
     `,
       [studentId]
     )
-    const parentNames = parentRows.map(p => `${p.first_name} ${p.last_name}`)
+    const parentNames = parentRows.map(p => `${p.last_name}, ${p.first_name}`)
 
     // --- Determine date range from schoolYear (optional) ---
     let dateClause = ''
-    const params = [teacherId, student.section_id]
+    const params = []
+    if (isTeacher) {
+      // if teacher, we will bind teacherId then section_id
+      params.push(teacherId, student.section_id)
+    } else {
+      // admin: only section_id required
+      params.push(student.section_id)
+    }
+
     if (schoolYear) {
       const parts = schoolYear.split('-').map(p => Number(p))
       if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
@@ -77,20 +85,35 @@ export default async function handler(req, res) {
       dateClause = ' AND YEAR(a.activity_date) = YEAR(CURDATE()) '
     }
 
-    // --- Activities created by teacher and assigned to this section ---
-    const [actRows] = await db.query(
+    // --- Activities assigned to this section ---
+    // If teacher: only activities created by that teacher (original behavior).
+    // If admin: include activities by any creator (so remove created_by filter).
+    let activitiesQuery = ''
+    if (isTeacher) {
+      activitiesQuery = `
+        SELECT DISTINCT a.id AS activity_id, a.title, a.activity_date, aa.id AS activity_assignment_id
+        FROM activities a
+        JOIN activity_assignments aa ON aa.activity_id = a.id
+        WHERE a.created_by = ?
+          AND aa.section_id = ?
+          AND a.is_deleted = 0
+          ${dateClause}
+        ORDER BY a.activity_date DESC
       `
-      SELECT DISTINCT a.id AS activity_id, a.title, a.activity_date, aa.id AS activity_assignment_id
-      FROM activities a
-      JOIN activity_assignments aa ON aa.activity_id = a.id
-      WHERE a.created_by = ?
-        AND aa.section_id = ?
-        AND a.is_deleted = 0
-        ${dateClause}
-      ORDER BY a.activity_date ASC
-    `,
-      params
-    )
+    } else {
+      // admin: don't restrict by created_by
+      activitiesQuery = `
+        SELECT DISTINCT a.id AS activity_id, a.title, a.activity_date, aa.id AS activity_assignment_id
+        FROM activities a
+        JOIN activity_assignments aa ON aa.activity_id = a.id
+        WHERE aa.section_id = ?
+          AND a.is_deleted = 0
+          ${dateClause}
+        ORDER BY a.activity_date DESC
+      `
+    }
+
+    const [actRows] = await db.query(activitiesQuery, params)
 
     // --- Group activities by date (YYYY-MM-DD) preserving descending order ---
     const groups = []
@@ -122,8 +145,7 @@ export default async function handler(req, res) {
     const leftLogoExists = fs.existsSync(logoLeftPath)
     const rightLogoExists = fs.existsSync(logoRightPath)
 
-    // Tunable sizes / offsets (env vars)
-    const logoWidth = Number(process.env.LOGO_WIDTH || 72) // px
+    const logoWidth = Number(process.env.LOGO_WIDTH || 72)
     const logoHeight = Number(process.env.LOGO_HEIGHT || 72)
 
     const schoolDepEd = 'Republic of the Philippines'
@@ -148,41 +170,28 @@ export default async function handler(req, res) {
     const right = pageWidth - doc.page.margins.right
     const contentWidth = right - left
 
-    // Pre-calculate header text heights using the actual fonts/sizes we'll draw with
-    // We'll treat each line separately to account for different font sizes.
     const headerLines = [
       { text: schoolDepEd, font: 'Helvetica-Bold', size: 11 },
       { text: schoolDepEdSub, font: 'Helvetica', size: 10 },
       { text: schoolRegion, font: 'Helvetica', size: 10 },
       { text: schoolCity, font: 'Helvetica', size: 10 },
       { text: schoolName, font: 'Helvetica-Bold', size: 12 },
-      { text: formTitle, font: 'Helvetica-Bold', size: 14 } // we'll underline when drawing
+      { text: formTitle, font: 'Helvetica-Bold', size: 14 }
     ]
 
-    const lineGap = 2 // small gap in px between lines
+    const lineGap = 2
     let totalHeaderTextHeight = 0
-
-    // measure each line height
     for (const ln of headerLines) {
       doc.font(ln.font).fontSize(ln.size)
       const h = doc.heightOfString(ln.text, { width: contentWidth, align: 'center' })
       totalHeaderTextHeight += h + lineGap
     }
-    totalHeaderTextHeight -= lineGap // remove last gap
-
-    // Decide header Y start (current doc.y)
+    totalHeaderTextHeight -= lineGap
     const headerStartY = doc.y
-
-    // Determine logo vertical position that centers logos with the header text block
     const logosHeight = Math.max(leftLogoExists ? logoHeight : 0, rightLogoExists ? logoHeight : 0)
-
-    // vertical center of header text block:
     const headerTextCenterY = headerStartY + totalHeaderTextHeight / 2
-
-    // top Y to draw logos so logos are vertically centered with headerTextCenterY
     const logoTopY = Math.max(headerStartY, Math.round(headerTextCenterY - logosHeight / 2))
 
-    // Place left logo if present (left margin)
     if (leftLogoExists) {
       try {
         doc.image(logoLeftPath, left, logoTopY, { width: logoWidth, height: logoHeight })
@@ -190,8 +199,6 @@ export default async function handler(req, res) {
         console.warn('Left logo load failed', e)
       }
     }
-
-    // Place right logo if present (right aligned)
     if (rightLogoExists) {
       try {
         doc.image(logoRightPath, right - logoWidth, logoTopY, { width: logoWidth, height: logoHeight })
@@ -200,23 +207,14 @@ export default async function handler(req, res) {
       }
     }
 
-    // Now draw the header text block starting at headerStartY, center-aligned
     let yCursor = headerStartY
     for (const ln of headerLines) {
       doc.font(ln.font).fontSize(ln.size)
-
-      // For the form title (last line) underline it by drawing a separate underline after rendering
       const options = { width: contentWidth, align: 'center' }
-
-      // Compute the height of this line to know how much to advance yCursor
       const h = doc.heightOfString(ln.text, options)
       doc.text(ln.text, left, yCursor, options)
-
-      // If this is the formTitle, draw underline under the text (thin)
       if (ln.text === formTitle) {
         const titleWidth = doc.widthOfString(ln.text)
-
-        // center x start
         const titleStartX = left + (contentWidth - titleWidth) / 2
         const underlineY = yCursor + h + 2
         doc
@@ -228,7 +226,6 @@ export default async function handler(req, res) {
       yCursor += h + lineGap
     }
 
-    // Move doc.y to after the header block (plus small spacing)
     doc.y = Math.max(yCursor, logoTopY + logosHeight) + 8
 
     // --- Info lines with underlined text values ---
@@ -247,8 +244,6 @@ export default async function handler(req, res) {
     for (const row of infoRows) {
       const yBefore = doc.y
       doc.text(row.label, left, yBefore, { width: labelColWidth - 8, align: 'left' })
-
-      // Draw underlined text value
       doc.font('Helvetica').fontSize(10)
       doc.text(row.value, valueColStartX, yBefore, {
         width: underlineRight - valueColStartX,
@@ -259,21 +254,16 @@ export default async function handler(req, res) {
 
     doc.moveDown(0.4)
 
-    // --- Activity table header and body (FIXED: Removed Parent Present column) ---
+    // --- Activity table header and body (SIGNATURE column) ---
     const tableLeft = left
     const tableWidth = right - tableLeft
-
-    // Updated column widths - removed Parent Present column
-    const colActivity = Math.round(tableWidth * 0.5) // Increased from 0.4
-    const colDate = Math.round(tableWidth * 0.2) // Increased from 0.15
-    const colSignature = tableWidth - colActivity - colDate // Remaining width
-    const rowHeight = 25 // Slightly increased for better alignment
+    const colActivity = Math.round(tableWidth * 0.5)
+    const colDate = Math.round(tableWidth * 0.2)
+    const colSignature = tableWidth - colActivity - colDate
+    const rowHeight = 25
     let y = doc.y + 6
 
-    // Draw table header with proper borders
     doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
-
-    // Draw vertical separators for header
     doc
       .moveTo(tableLeft + colActivity, y)
       .lineTo(tableLeft + colActivity, y + rowHeight)
@@ -283,20 +273,10 @@ export default async function handler(req, res) {
       .lineTo(tableLeft + colActivity + colDate, y + rowHeight)
       .stroke()
 
-    // Header text with proper vertical centering
     doc.font('Helvetica-Bold').fontSize(11)
-    const headerTextY = y + (rowHeight - 11) / 2 // Center text vertically in row
-
-    doc.text('ACTIVITY', tableLeft + 6, headerTextY, {
-      width: colActivity - 12,
-      align: 'center',
-      height: 11
-    })
-    doc.text('DATE', tableLeft + colActivity + 6, headerTextY, {
-      width: colDate - 12,
-      align: 'center',
-      height: 11
-    })
+    const headerTextY = y + (rowHeight - 11) / 2
+    doc.text('ACTIVITY', tableLeft + 6, headerTextY, { width: colActivity - 12, align: 'center', height: 11 })
+    doc.text('DATE', tableLeft + colActivity + 6, headerTextY, { width: colDate - 12, align: 'center', height: 11 })
     doc.text('SIGNATURE', tableLeft + colActivity + colDate + 6, headerTextY, {
       width: colSignature - 12,
       align: 'center',
@@ -306,20 +286,14 @@ export default async function handler(req, res) {
     y += rowHeight
     doc.font('Helvetica').fontSize(10)
 
-    // Draw activity rows or blank rows if no activities
     if (!groups.length) {
-      // Draw 8 blank rows for activities
       const blankRows = 8
       for (let i = 0; i < blankRows; i++) {
         if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 60) {
           doc.addPage()
           y = doc.y + 6
         }
-
-        // Draw row border
         doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
-
-        // Draw vertical separators
         doc
           .moveTo(tableLeft + colActivity, y)
           .lineTo(tableLeft + colActivity, y + rowHeight)
@@ -328,22 +302,16 @@ export default async function handler(req, res) {
           .moveTo(tableLeft + colActivity + colDate, y)
           .lineTo(tableLeft + colActivity + colDate, y + rowHeight)
           .stroke()
-
         y += rowHeight
       }
     } else {
-      // Draw activities
       for (const grp of groups) {
         for (const act of grp.activities) {
           if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 60) {
             doc.addPage()
             y = doc.y + 6
           }
-
-          // Draw row border
           doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
-
-          // Draw vertical separators
           doc
             .moveTo(tableLeft + colActivity, y)
             .lineTo(tableLeft + colActivity, y + rowHeight)
@@ -353,29 +321,20 @@ export default async function handler(req, res) {
             .lineTo(tableLeft + colActivity + colDate, y + rowHeight)
             .stroke()
 
-          // Activity text with proper vertical centering
           const textY = y + (rowHeight - 10) / 2
           doc.text(act.title || '', tableLeft + 6, textY, {
             width: colActivity - 12,
             height: rowHeight - 6,
             align: 'left'
           })
-
-          // Date text with proper vertical centering
           const dateStr = act.date ? new Date(act.date).toLocaleDateString() : ''
-          doc.text(dateStr, tableLeft + colActivity + 6, textY, {
-            width: colDate - 12,
-            align: 'center'
-          })
-
-          // Signature column left blank for manual signing
+          doc.text(dateStr, tableLeft + colActivity + 6, textY, { width: colDate - 12, align: 'center' })
 
           y += rowHeight
         }
       }
     }
 
-    // Footer lines
     if (y + 80 > doc.page.height - doc.page.margins.bottom) {
       doc.addPage()
       y = doc.y + 6

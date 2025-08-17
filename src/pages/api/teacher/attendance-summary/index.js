@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     // List activities that are assigned to the teacher's sections (or teacher created but only if assigned to their sections)
     // We join activity_assignments -> teacher_sections to ensure only activities assigned to teacher's sections are returned
     const sql = `
-      SELECT DISTINCT a.id, a.title, DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
+      SELECT DISTINCT a.id, a.title, a.activity_date
       FROM activities a
       JOIN activity_assignments aa ON aa.activity_id = a.id
       JOIN teacher_sections ts ON ts.section_id = aa.section_id AND ts.user_id = ?

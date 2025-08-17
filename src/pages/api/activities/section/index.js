@@ -18,7 +18,7 @@ export default async function handler(req, res) {
       SELECT
         a.id,
         a.title,
-        a.activity_date,
+        DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
         a.created_at,
         -- Count attendance statistics
         COUNT(CASE WHEN att.status = 'present' THEN 1 END) as present_count,

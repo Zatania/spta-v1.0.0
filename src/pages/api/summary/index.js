@@ -160,7 +160,7 @@ export default async function handler(req, res) {
         SELECT
           a.id AS activity_id,
           a.title,
-          a.activity_date
+          DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
         FROM activities a
         JOIN activity_assignments aa ON aa.activity_id = a.id
         WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhereA}
@@ -407,7 +407,7 @@ export default async function handler(req, res) {
           SELECT DISTINCT
             a.id,
             a.title,
-            a.activity_date
+            DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
           FROM activities a
           JOIN activity_assignments aa ON aa.activity_id = a.id
           WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhereA}

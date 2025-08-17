@@ -173,29 +173,19 @@ export default function AttendancePage() {
     },
     {
       field: 'attendance_state',
-      headerName: 'Attendance Status',
-      width: 180,
+      headerName: 'Student Present',
+      width: 160,
       sortable: false,
       filterable: false,
-      renderCell: params => {
-        const val = params.value || 'absent'
-        const bg = val === 'present' ? '#e8f5e9' : '#ffebee'
-
-        return (
-          <Box sx={{ width: '100%' }}>
-            <TextField
-              select
-              size='small'
-              value={val}
-              onChange={e => handleAttendanceChange(params.row.id, 'attendance_state', e.target.value)}
-              sx={{ minWidth: 140, backgroundColor: bg, borderRadius: 1 }}
-            >
-              <MenuItem value='present'>Present</MenuItem>
-              <MenuItem value='absent'>Absent</MenuItem>
-            </TextField>
-          </Box>
-        )
-      }
+      renderCell: params => (
+        <Checkbox
+          checked={params.value === 'present'}
+          onChange={e =>
+            handleAttendanceChange(params.row.id, 'attendance_state', e.target.checked ? 'present' : 'absent')
+          }
+          inputProps={{ 'aria-label': 'student present' }}
+        />
+      )
     },
     {
       field: 'payment_paid',

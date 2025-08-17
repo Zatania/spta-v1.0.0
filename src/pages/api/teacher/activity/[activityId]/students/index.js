@@ -59,7 +59,7 @@ export default async function handler(req, res) {
     )
     if (assignments.length === 0) return res.status(200).json({ students: [], total: 0 })
 
-    // If multiple sections, aggregate students across them; we’ll return a flat list with section fields
+    // If multiple sections, aggregate students across them; we'll return a flat list with section fields
     const aaIds = assignments.map(a => a.activity_assignment_id)
 
     // Count for pagination
@@ -78,13 +78,21 @@ export default async function handler(req, res) {
     )
     const total = countRows[0]?.total ?? 0
 
-    // Page rows
+    // Page rows with enhanced data
     const offset = (page - 1) * pageSize
 
     const [rows] = await db.query(
       `
-      SELECT st.id, st.lrn, st.first_name, st.last_name,
-             st.grade_id, st.section_id, s.name AS section_name, g.name AS grade_name
+      SELECT
+        st.id,
+        st.lrn,
+        st.first_name,
+        st.last_name,
+        st.picture_url,
+        st.grade_id,
+        st.section_id,
+        s.name AS section_name,
+        g.name AS grade_name
       FROM students st
       JOIN sections s ON s.id = st.section_id
       JOIN grades g   ON g.id = st.grade_id
@@ -109,49 +117,95 @@ export default async function handler(req, res) {
     let paymentMap = new Map()
 
     if (studentIds.length) {
+      // Get attendance data
       const [attRows] = await db.query(
         `
-        SELECT at.student_id, at.parent_present, at.status, aa.section_id
+        SELECT
+          at.student_id,
+          at.parent_present,
+          at.status,
+          at.marked_at,
+          aa.section_id,
+          u.full_name as marked_by_name
         FROM attendance at
         JOIN activity_assignments aa ON aa.id = at.activity_assignment_id
+        LEFT JOIN users u ON u.id = at.marked_by
         WHERE aa.id IN (${aaIds.map(() => '?').join(',')})
           AND at.student_id IN (${studentIds.map(() => '?').join(',')})
       `,
         [...aaIds, ...studentIds]
       )
       attendanceMap = new Map(
-        attRows.map(r => [`${r.student_id}:${r.section_id}`, { status: r.status, parent_present: !!r.parent_present }])
+        attRows.map(r => [
+          `${r.student_id}:${r.section_id}`,
+          {
+            status: r.status,
+            parent_present: !!r.parent_present,
+            marked_at: r.marked_at,
+            marked_by_name: r.marked_by_name
+          }
+        ])
       )
 
+      // Get payment data
       const [payRows] = await db.query(
         `
-        SELECT p.student_id, p.paid, p.payment_date, aa.section_id
+        SELECT
+          p.student_id,
+          p.paid,
+          p.payment_date,
+          p.marked_at as payment_marked_at,
+          aa.section_id,
+          u.full_name as payment_marked_by_name
         FROM payments p
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
+        LEFT JOIN users u ON u.id = p.marked_by
         WHERE aa.id IN (${aaIds.map(() => '?').join(',')})
           AND p.student_id IN (${studentIds.map(() => '?').join(',')})
       `,
         [...aaIds, ...studentIds]
       )
       paymentMap = new Map(
-        payRows.map(r => [`${r.student_id}:${r.section_id}`, { paid: !!r.paid, payment_date: r.payment_date }])
+        payRows.map(r => [
+          `${r.student_id}:${r.section_id}`,
+          {
+            paid: !!r.paid,
+            payment_date: r.payment_date,
+            payment_marked_at: r.payment_marked_at,
+            payment_marked_by_name: r.payment_marked_by_name
+          }
+        ])
       )
     }
 
     // Parents per student
     const [parentRows] = await db.query(
       `
-      SELECT sp.student_id, p.first_name, p.last_name
+      SELECT
+        sp.student_id,
+        sp.relation,
+        p.first_name,
+        p.last_name,
+        p.contact_info
       FROM student_parents sp
       JOIN parents p ON p.id = sp.parent_id
       WHERE sp.student_id IN (${studentIds.length ? studentIds.map(() => '?').join(',') : 'NULL'})
+        AND p.is_deleted = 0
+      ORDER BY sp.student_id, sp.relation
     `,
       studentIds.length ? studentIds : []
     )
+
     const parentsByStudent = new Map()
     for (const r of parentRows) {
       const arr = parentsByStudent.get(r.student_id) || []
-      arr.push(`${r.first_name} ${r.last_name}`)
+
+      const parentInfo = {
+        name: `${r.first_name} ${r.last_name}`,
+        relation: r.relation,
+        contact_info: r.contact_info
+      }
+      arr.push(parentInfo)
       parentsByStudent.set(r.student_id, arr)
     }
 
@@ -159,14 +213,20 @@ export default async function handler(req, res) {
       const aaId = mapSectionToAa.get(r.section_id)
       const att = attendanceMap.get(`${r.id}:${r.section_id}`) || null
       const pay = paymentMap.get(`${r.id}:${r.section_id}`) || null
+      const parentsList = parentsByStudent.get(r.id) || []
 
       return {
         ...r,
-        parents: (parentsByStudent.get(r.id) || []).join(', '),
+        parents: parentsList.map(p => p.name).join(', '),
+        parents_details: parentsList,
         attendance_status: att?.status ?? null,
         parent_present: att?.parent_present ?? false,
+        attendance_marked_at: att?.marked_at ?? null,
+        attendance_marked_by: att?.marked_by_name ?? null,
         payment_paid: pay?.paid ?? null,
         payment_date: pay?.payment_date ?? null,
+        payment_marked_at: pay?.payment_marked_at ?? null,
+        payment_marked_by: pay?.payment_marked_by_name ?? null,
         activity_assignment_id: aaId
       }
     })

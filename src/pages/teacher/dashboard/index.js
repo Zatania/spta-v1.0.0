@@ -9,17 +9,22 @@ import {
   Tooltip,
   Grid,
   Button,
-  List,
-  ListItem,
-  ListItemText,
-  Divider,
   Chip,
-  Paper
+  Paper,
+  TableContainer,
+  Table,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableBody,
+  Avatar,
+  Stack
 } from '@mui/material'
 import { DataGrid } from '@mui/x-data-grid'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import DownloadIcon from '@mui/icons-material/Download'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
+import AssessmentIcon from '@mui/icons-material/Assessment'
 import dayjs from 'dayjs'
 import { useRouter } from 'next/router'
 import axios from 'axios'
@@ -43,6 +48,7 @@ export default function TeacherDashboard() {
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(false)
   const [studentsLoading, setStudentsLoading] = useState(false)
+  const [downloadingReport, setDownloadingReport] = useState(false)
   const router = useRouter()
 
   const fetchSummary = async () => {
@@ -128,6 +134,38 @@ export default function TeacherDashboard() {
       URL.revokeObjectURL(a.href)
     } catch (error) {
       console.error('Error downloading form:', error)
+    }
+  }
+
+  const handleDownloadAttendanceReport = async () => {
+    if (!selectedActivity) return
+
+    setDownloadingReport(true)
+    try {
+      const url = `/api/teacher/reports/attendance?activity_id=${selectedActivity.id}`
+      const resp = await fetch(url)
+
+      if (!resp.ok) {
+        console.error('Failed to generate attendance report')
+
+        return
+      }
+
+      const blob = await resp.blob()
+      const a = document.createElement('a')
+
+      const filename = `Attendance_Report_${selectedActivity.title}_${dayjs(selectedActivity.activity_date).format(
+        'YYYY-MM-DD'
+      )}.pdf`.replace(/\s+/g, '_')
+
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (error) {
+      console.error('Error downloading attendance report:', error)
+    } finally {
+      setDownloadingReport(false)
     }
   }
 
@@ -227,6 +265,23 @@ export default function TeacherDashboard() {
     { field: 'unpaid_count', headerName: 'Unpaid', flex: 0.4 }
   ]
 
+  const getStatusColor = status => {
+    switch (status) {
+      case 'present':
+        return 'success'
+      case 'absent':
+        return 'error'
+      default:
+        return 'default'
+    }
+  }
+
+  const getPaymentColor = paid => {
+    if (paid === null) return 'default'
+
+    return paid ? 'primary' : 'warning'
+  }
+
   return (
     <Box p={3}>
       {/* Charts Section */}
@@ -259,6 +314,7 @@ export default function TeacherDashboard() {
           </Card>
         </Grid>
       </Grid>
+
       {/* Main Summary Table */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -287,82 +343,156 @@ export default function TeacherDashboard() {
         </CardContent>
       </Card>
 
-      {/* Selected Activity Students */}
+      {/* Detailed Students Attendance Table */}
       {selectedActivity && (
         <Card>
           <CardContent>
-            <Typography variant='h6' gutterBottom>
-              Students - {selectedActivity.title}
-              <Chip label={dayjs(selectedActivity.activity_date).format('YYYY-MM-DD')} size='small' sx={{ ml: 2 }} />
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Box>
+                <Typography variant='h6' gutterBottom>
+                  Attendance Details - {selectedActivity.title}
+                </Typography>
+                <Stack direction='row' spacing={1} sx={{ mb: 2 }}>
+                  <Chip label={dayjs(selectedActivity.activity_date).format('YYYY-MM-DD')} size='small' />
+                  <Chip label={`Total: ${students.length}`} size='small' variant='outlined' />
+                  <Chip
+                    label={`Present: ${students.filter(s => s.attendance_status === 'present').length}`}
+                    size='small'
+                    color='success'
+                    variant='outlined'
+                  />
+                  <Chip
+                    label={`Absent: ${students.filter(s => s.attendance_status === 'absent').length}`}
+                    size='small'
+                    color='error'
+                    variant='outlined'
+                  />
+                </Stack>
+              </Box>
+              <Button
+                variant='contained'
+                startIcon={<AssessmentIcon />}
+                onClick={handleDownloadAttendanceReport}
+                disabled={downloadingReport}
+                color='primary'
+              >
+                {downloadingReport ? 'Generating...' : 'Download Report'}
+              </Button>
+            </Box>
 
             {studentsLoading ? (
               <Typography>Loading students...</Typography>
             ) : (
-              <>
-                <Typography variant='body2' color='text.secondary' sx={{ mb: 2 }}>
-                  Total Students: {students.length} | Present:{' '}
-                  {students.filter(s => s.attendance_status === 'present').length} | Absent:{' '}
-                  {students.filter(s => s.attendance_status === 'absent').length}
-                </Typography>
-
-                <Paper sx={{ maxHeight: 400, overflow: 'auto' }}>
-                  <List dense>
-                    {students.map((student, index) => (
-                      <div key={student.id}>
-                        <ListItem
-                          secondaryAction={
-                            <Button
-                              size='small'
-                              startIcon={<PictureAsPdfIcon />}
-                              onClick={() => handleDownloadForm(student)}
-                              variant='outlined'
-                            >
-                              Download Form
-                            </Button>
-                          }
-                        >
-                          <ListItemText
-                            primary={
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <Typography variant='body1'>
-                                  {student.last_name}, {student.first_name}
-                                </Typography>
-                                <Chip
-                                  label={student.attendance_status === 'present' ? 'Present' : 'Absent'}
-                                  size='small'
-                                  color={student.attendance_status === 'present' ? 'success' : 'error'}
-                                />
-                                {student.payment_paid !== null && (
-                                  <Chip
-                                    label={student.payment_paid ? 'Paid' : 'Unpaid'}
-                                    size='small'
-                                    color={student.payment_paid ? 'primary' : 'warning'}
-                                  />
-                                )}
-                                {student.parent_present && <Chip label='Parent Present' size='small' color='info' />}
-                              </Box>
+              <TableContainer component={Paper} sx={{ maxHeight: 600 }}>
+                <Table stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>
+                        <strong>LRN</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Student Name</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Grade & Section</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Student Presence</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Parent Presence</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Payment Status</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Payment Date</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Parents</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Action</strong>
+                      </TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {students.map(student => (
+                      <TableRow key={student.id} hover>
+                        <TableCell>
+                          <Typography variant='body2' fontWeight='medium'>
+                            {student.lrn}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {student.picture_url && <Avatar src={student.picture_url} sx={{ width: 32, height: 32 }} />}
+                            <Typography variant='body2'>
+                              {student.last_name}, {student.first_name}
+                            </Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant='body2'>
+                            {student.grade_name} - {student.section_name}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={
+                              student.attendance_status
+                                ? student.attendance_status.charAt(0).toUpperCase() + student.attendance_status.slice(1)
+                                : 'Not Marked'
                             }
-                            secondary={
-                              <Box>
-                                <Typography variant='caption' display='block'>
-                                  LRN: {student.lrn} | {student.grade_name} - {student.section_name}
-                                </Typography>
-                                {student.parents && (
-                                  <Typography variant='caption' color='text.secondary'>
-                                    Parents: {student.parents}
-                                  </Typography>
-                                )}
-                              </Box>
-                            }
+                            size='small'
+                            color={getStatusColor(student.attendance_status)}
+                            variant={student.attendance_status ? 'filled' : 'outlined'}
                           />
-                        </ListItem>
-                        {index < students.length - 1 && <Divider />}
-                      </div>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={student.parent_present ? 'Present' : 'Absent'}
+                            size='small'
+                            color={student.parent_present ? 'info' : 'default'}
+                            variant={student.parent_present ? 'filled' : 'outlined'}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {student.payment_paid !== null ? (
+                            <Chip
+                              label={student.payment_paid ? 'Paid' : 'Unpaid'}
+                              size='small'
+                              color={getPaymentColor(student.payment_paid)}
+                            />
+                          ) : (
+                            <Chip label='Not Set' size='small' variant='outlined' />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant='body2'>
+                            {student.payment_date ? dayjs(student.payment_date).format('MMM DD, YYYY') : '-'}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant='caption' color='text.secondary'>
+                            {student.parents || 'No parents listed'}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            size='small'
+                            startIcon={<PictureAsPdfIcon />}
+                            onClick={() => handleDownloadForm(student)}
+                            variant='outlined'
+                          >
+                            Form
+                          </Button>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </List>
-                </Paper>
-              </>
+                  </TableBody>
+                </Table>
+              </TableContainer>
             )}
           </CardContent>
         </Card>

@@ -18,6 +18,7 @@ import {
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
+import DeleteIcon from '@mui/icons-material/Delete'
 import axios from 'axios'
 import { DataGrid } from '@mui/x-data-grid'
 import { useSession } from 'next-auth/react'
@@ -140,6 +141,17 @@ export default function ActivitiesPage() {
     }
   }
 
+  const handleDelete = async row => {
+    if (!confirm(`Delete activity "${row.title}"?`)) return
+    try {
+      await axios.delete(`/api/activities/${row.id}`)
+      setActivities(prev => prev.filter(a => a.id !== row.id)) // update UI
+    } catch (err) {
+      console.error(err)
+      alert(err?.response?.data?.message ?? 'Delete failed')
+    }
+  }
+
   const columns = [
     { field: 'title', headerName: 'Title', flex: 1 },
     { field: 'activity_date', headerName: 'Date', width: 130 },
@@ -164,12 +176,17 @@ export default function ActivitiesPage() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
+      width: 160,
       renderCell: params => (
         <Stack direction='row' spacing={1}>
           <Tooltip title='Edit'>
             <IconButton size='small' onClick={() => openEdit(params.row)}>
               <EditIcon fontSize='small' />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title='Delete'>
+            <IconButton size='small' color='error' onClick={() => handleDelete(params.row)}>
+              <DeleteIcon fontSize='small' />
             </IconButton>
           </Tooltip>
         </Stack>

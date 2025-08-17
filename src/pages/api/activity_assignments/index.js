@@ -52,7 +52,7 @@ export default async function handler(req, res) {
       const total = countRows[0]?.total ?? 0
 
       const sql = `
-        SELECT aa.id, aa.activity_id, a.title, a.activity_date, aa.grade_id, aa.section_id, g.name AS grade_name, s.name AS section_name
+        SELECT aa.id, aa.activity_id, a.title, a.activity_date, a.payments_enabled, aa.grade_id, aa.section_id, g.name AS grade_name, s.name AS section_name
         FROM activity_assignments aa
         JOIN activities a ON a.id = aa.activity_id AND a.is_deleted = 0
         JOIN grades g ON g.id = aa.grade_id
@@ -72,10 +72,11 @@ export default async function handler(req, res) {
       if (!activity_id || !grade_id || !section_id)
         return res.status(400).json({ message: 'activity_id, grade_id and section_id are required' })
 
-      // validate activity exists
-      const [aRows] = await db.query('SELECT id, created_by FROM activities WHERE id = ? AND is_deleted = 0 LIMIT 1', [
-        activity_id
-      ])
+      // validate activity exists and fetch payments_enabled
+      const [aRows] = await db.query(
+        'SELECT id, created_by, payments_enabled FROM activities WHERE id = ? AND is_deleted = 0 LIMIT 1',
+        [activity_id]
+      )
       if (!aRows.length) return res.status(400).json({ message: 'Activity not found' })
 
       // check section exists and matches grade
@@ -101,7 +102,7 @@ export default async function handler(req, res) {
         const id = ins.insertId
 
         const [row] = await db.query(
-          'SELECT aa.id, aa.activity_id, a.title, a.activity_date, aa.grade_id, aa.section_id FROM activity_assignments aa JOIN activities a ON a.id = aa.activity_id WHERE aa.id = ? LIMIT 1',
+          'SELECT aa.id, aa.activity_id, a.title, a.activity_date, a.payments_enabled, aa.grade_id, aa.section_id FROM activity_assignments aa JOIN activities a ON a.id = aa.activity_id WHERE aa.id = ? LIMIT 1',
           [id]
         )
 

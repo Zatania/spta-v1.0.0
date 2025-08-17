@@ -151,7 +151,10 @@ export default function AttendancePage() {
     }
   }
 
-  const columns = [
+  // Check if payments are enabled for the current assignment
+  const paymentsEnabled = activeAssignment?.payments_enabled !== 0
+
+  const baseColumns = [
     { field: 'lrn', headerName: 'LRN', width: 200 },
     { field: 'last_name', headerName: 'Last name', width: 160 },
     { field: 'first_name', headerName: 'First name', width: 160 },
@@ -186,7 +189,10 @@ export default function AttendancePage() {
           inputProps={{ 'aria-label': 'student present' }}
         />
       )
-    },
+    }
+  ]
+
+  const paymentColumns = [
     {
       field: 'payment_paid',
       headerName: 'Payment',
@@ -223,6 +229,9 @@ export default function AttendancePage() {
       }
     }
   ]
+
+  // Conditionally include payment columns based on payments_enabled
+  const columns = paymentsEnabled ? [...baseColumns, ...paymentColumns] : baseColumns
 
   // assignments grid columns for the main page
   const assignmentColumns = [
@@ -297,9 +306,11 @@ export default function AttendancePage() {
             <Button variant='contained' color='primary' onClick={saveAttendance} disabled={savingAttendance}>
               {savingAttendance ? 'Saving...' : 'Save Attendance'}
             </Button>
-            <Button variant='contained' color='success' onClick={savePayments} disabled={savingPayments}>
-              {savingPayments ? 'Saving...' : 'Save Payments'}
-            </Button>
+            {paymentsEnabled && (
+              <Button variant='contained' color='success' onClick={savePayments} disabled={savingPayments}>
+                {savingPayments ? 'Saving...' : 'Save Payments'}
+              </Button>
+            )}
             <Box sx={{ flexGrow: 1 }} />
             <Typography variant='caption'>Rows: {students.length}</Typography>
           </Box>

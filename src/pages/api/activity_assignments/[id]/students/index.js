@@ -25,9 +25,12 @@ export default async function handler(req, res) {
     const page_size = Math.max(1, Math.min(1000, Number(req.query.page_size || 50)))
     const offset = (page - 1) * page_size
 
-    // verify assignment and section/grade
+    // verify assignment and section/grade, also fetch payments_enabled from activities
     const [assRows] = await db.query(
-      'SELECT aa.id, aa.activity_id, aa.grade_id, aa.section_id FROM activity_assignments aa WHERE aa.id = ? LIMIT 1',
+      `SELECT aa.id, aa.activity_id, aa.grade_id, aa.section_id, a.payments_enabled
+       FROM activity_assignments aa
+       JOIN activities a ON a.id = aa.activity_id
+       WHERE aa.id = ? LIMIT 1`,
       [assignmentId]
     )
     if (!assRows.length) return res.status(404).json({ message: 'Assignment not found' })
@@ -92,7 +95,13 @@ export default async function handler(req, res) {
         : null
     }))
 
-    return res.status(200).json({ total, page, page_size, students })
+    return res.status(200).json({
+      total,
+      page,
+      page_size,
+      students,
+      payments_enabled: assignment.payments_enabled
+    })
   } catch (err) {
     console.error('GET /activity_assignments/:id/students error:', err)
 

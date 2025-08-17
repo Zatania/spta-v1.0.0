@@ -97,20 +97,34 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'DELETE') {
-      // Soft-delete teacher
       let conn
       try {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
+        // 1. Soft delete teacher
         await conn.query('UPDATE users SET is_deleted = 1, deleted_at = NOW() WHERE id = ?', [teacherId])
         await conn.query('DELETE FROM user_roles WHERE user_id = ?', [teacherId])
         await conn.query('DELETE FROM teacher_sections WHERE user_id = ?', [teacherId])
 
+        // 2. Find all activities created by this teacher
+        const [activities] = await conn.query('SELECT id FROM activities WHERE created_by = ? AND is_deleted = 0', [
+          teacherId
+        ])
+        const activityIds = activities.map(a => a.id)
+
+        if (activityIds.length > 0) {
+          // 2a. Delete assignments linked to those activities
+          await conn.query('DELETE FROM activity_assignments WHERE activity_id IN (?)', [activityIds])
+
+          // 2b. Soft delete the activities
+          await conn.query('UPDATE activities SET is_deleted = 1, deleted_at = NOW() WHERE id IN (?)', [activityIds])
+        }
+
         await conn.commit()
         conn.release()
 
-        return res.status(200).json({ message: 'Teacher soft-deleted' })
+        return res.status(200).json({ message: 'Teacher and related activities soft-deleted' })
       } catch (err) {
         if (conn) {
           await conn.rollback().catch(() => {})

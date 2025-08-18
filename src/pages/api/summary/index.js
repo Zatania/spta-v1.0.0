@@ -160,7 +160,7 @@ export default async function handler(req, res) {
         SELECT
           a.id AS activity_id,
           a.title,
-          DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
+          a.activity_date
         FROM activities a
         JOIN activity_assignments aa ON aa.activity_id = a.id
         WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhereA}
@@ -407,10 +407,10 @@ export default async function handler(req, res) {
           SELECT DISTINCT
             a.id,
             a.title,
-            DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
+            a.activity_date
           FROM activities a
           JOIN activity_assignments aa ON aa.activity_id = a.id
-          WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhereA}
+          WHERE aa.section_id = ? AND aa.is_deleted = 0 ${dateWhereA}
           ORDER BY a.activity_date DESC
           `,
         [section_id, ...dateParams]
@@ -427,7 +427,8 @@ export default async function handler(req, res) {
             SUM(att.parent_present = 0) AS parent_absent_count
           FROM attendance att
           JOIN activity_assignments aa ON aa.id = att.activity_assignment_id
-          WHERE aa.activity_id = ? AND aa.section_id = ?
+          JOIN students s ON s.id = att.student_id
+          WHERE aa.activity_id = ? AND aa.section_id = ? AND s.is_deleted = 0
           `,
           [act.id, section_id]
         )
@@ -451,6 +452,7 @@ export default async function handler(req, res) {
           present_count: attRows[0]?.present_count || 0,
           absent_count: attRows[0]?.absent_count || 0,
           parent_present_count: attRows[0]?.parent_present_count || 0,
+          parent_absent_count: attRows[0]?.parent_absent_count || 0,
           paid_count: payRows[0]?.paid_count || 0,
           unpaid_count: payRows[0]?.unpaid_count || 0
         })

@@ -1420,7 +1420,9 @@ const Dashboard = () => {
               <UserDetails
                 icon='mdi:account-check'
                 color='success'
-                count={loadingOverview ? <CircularProgress size={20} /> : overview?.attendance?.total_present ?? 0}
+                count={
+                  loadingOverview ? <CircularProgress size={20} /> : overview?.attendance?.parent_present_count ?? 0
+                }
                 title='Total Present'
               />
             </Grid>
@@ -1428,7 +1430,9 @@ const Dashboard = () => {
               <UserDetails
                 icon='mdi:account-cancel'
                 color='error'
-                count={loadingOverview ? <CircularProgress size={20} /> : overview?.attendance?.total_absent ?? 0}
+                count={
+                  loadingOverview ? <CircularProgress size={20} /> : overview?.attendance?.parent_absent_count ?? 0
+                }
                 title='Total Absent'
               />
             </Grid>

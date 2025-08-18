@@ -516,13 +516,13 @@ export default function TeacherDashboard() {
                   <Chip label={dayjs(selectedActivity.activity_date).format('YYYY-MM-DD')} size='small' />
                   <Chip label={`Total: ${students.length}`} size='small' variant='outlined' />
                   <Chip
-                    label={`Present: ${students.filter(s => s.attendance_status === 'present').length}`}
+                    label={`Present: ${students.filter(s => s.parent_present === true).length}`}
                     size='small'
                     color='success'
                     variant='outlined'
                   />
                   <Chip
-                    label={`Absent: ${students.filter(s => s.attendance_status === 'absent').length}`}
+                    label={`Absent: ${students.filter(s => s.parent_present === false).length}`}
                     size='small'
                     color='error'
                     variant='outlined'

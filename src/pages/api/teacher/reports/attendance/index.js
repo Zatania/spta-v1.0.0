@@ -20,10 +20,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Verify teacher has access to this activity
+    // Verify teacher has access to this activity AND get payments_enabled status
     const [activityCheck] = await db.query(
       `
-      SELECT DISTINCT a.id, a.title, a.activity_date
+      SELECT DISTINCT a.id, a.title, a.activity_date, a.payments_enabled
       FROM activities a
       JOIN activity_assignments aa ON aa.activity_id = a.id
       JOIN teacher_sections ts ON ts.section_id = aa.section_id
@@ -72,7 +72,7 @@ export default async function handler(req, res) {
         s.name as section_name,
         COALESCE(att.status, 'not_marked') as attendance_status,
         COALESCE(att.parent_present, 0) as parent_present,
-        COALESCE(p.paid, 0) as payment_paid,
+        p.paid as payment_paid,
         p.payment_date,
         GROUP_CONCAT(CONCAT(par.first_name, ' ', par.last_name) SEPARATOR ', ') as parents
       FROM students st
@@ -205,22 +205,36 @@ export default async function handler(req, res) {
 
     // Sections covered
     const uniqueSections = [...new Set(sections.map(s => `${s.grade_name} - ${s.section_name}`))]
-    doc.text(`Sections Covered: ${uniqueSections.join(', ')}`, left)
+    doc.text(`Grade and Section: ${uniqueSections.join(', ')}`, left)
     doc.moveDown(0.8)
 
-    // Summary Statistics
+    // Summary Statistics - Fixed to handle payments_enabled properly
     const totalStudents = students.length
-    const presentStudents = students.filter(s => s.attendance_status === 'present').length
-    const absentStudents = students.filter(s => s.attendance_status === 'absent').length
-    const paidStudents = students.filter(s => s.payment_paid === 1).length
-    const unpaidStudents = students.filter(s => s.payment_paid === 0).length
+    const presentStudents = students.filter(s => s.parent_present === 1).length
+    const absentStudents = students.filter(s => s.parent_present === 0).length
+
+    let paidStudents = 0
+    let unpaidStudents = 0
+
+    if (activity.payments_enabled) {
+      paidStudents = students.filter(s => s.payment_paid === 1).length
+      unpaidStudents = students.filter(s => s.payment_paid === 0 || s.payment_paid === null).length
+    }
 
     doc.fontSize(12).font('Helvetica-Bold').text('Summary:', left)
     doc.fontSize(10).font('Helvetica')
-    doc.text(
-      `Total Students: ${totalStudents} | Present: ${presentStudents} | Absent: ${absentStudents} | Paid: ${paidStudents} | Unpaid: ${unpaidStudents}`,
-      left
-    )
+
+    if (activity.payments_enabled) {
+      doc.text(
+        `Total Students: ${totalStudents} | Parent Present: ${presentStudents} | Parent Absent: ${absentStudents} | Paid: ${paidStudents} | Unpaid: ${unpaidStudents}`,
+        left
+      )
+    } else {
+      doc.text(
+        `Total Students: ${totalStudents} | Parent Present: ${presentStudents} | Parent Absent: ${absentStudents} | Payments: N/A`,
+        left
+      )
+    }
     doc.moveDown(1)
 
     // --- IMPROVED TABLE LAYOUT (Removed Grade/Section column) ---
@@ -228,14 +242,13 @@ export default async function handler(req, res) {
     const tableWidth = contentWidth
     const tableLeft = left
 
-    // Better column distribution for A4 width (removed grade/section column)
-    const col1Width = 60 // LRN
-    const col2Width = 120 // Student Name (wider since we have more space)
-    const col3Width = 70 // Attendance
-    const col4Width = 50 // Parent Present
-    const col5Width = 60 // Payment
-    const col6Width = 85 // Payment Date (wider for full date with year)
-    const col7Width = tableWidth - (col1Width + col2Width + col3Width + col4Width + col5Width + col6Width) // Parents (remaining space)
+    // Better column distribution for A4 width (removed grade/section and attendance columns)
+    const col1Width = 70 // LRN (wider since we have more space)
+    const col2Width = 140 // Student Name (wider since we have more space)
+    const col3Width = 70 // Parent Present
+    const col4Width = 60 // Payment
+    const col5Width = 85 // Payment Date (wider for full date with year)
+    const col6Width = tableWidth - (col1Width + col2Width + col3Width + col4Width + col5Width) // Parents (remaining space)
 
     // Column positions
     const col1X = tableLeft
@@ -244,7 +257,6 @@ export default async function handler(req, res) {
     const col4X = col3X + col3Width
     const col5X = col4X + col4Width
     const col6X = col5X + col5Width
-    const col7X = col6X + col6Width
 
     const rowHeight = 18 // Reduced for better fit
 
@@ -263,8 +275,8 @@ export default async function handler(req, res) {
         .lineTo(tableLeft + tableWidth, y + rowHeight)
         .stroke()
 
-      // Draw vertical lines (updated for removed column)
-      const verticalLines = [col1X, col2X, col3X, col4X, col5X, col6X, col7X, col7X + col7Width]
+      // Draw vertical lines (updated for removed columns)
+      const verticalLines = [col1X, col2X, col3X, col4X, col5X, col6X, col6X + col6Width]
       verticalLines.forEach(x => {
         doc
           .moveTo(x, y)
@@ -284,11 +296,10 @@ export default async function handler(req, res) {
 
       doc.text('LRN', col1X + padding, textY, { width: col1Width - 2 * padding, align: 'center' })
       doc.text('Student Name', col2X + padding, textY, { width: col2Width - 2 * padding, align: 'center' })
-      doc.text('Attendance', col3X + padding, textY, { width: col3Width - 2 * padding, align: 'center' })
-      doc.text('Parent', col4X + padding, textY, { width: col4Width - 2 * padding, align: 'center' })
-      doc.text('Payment', col5X + padding, textY, { width: col5Width - 2 * padding, align: 'center' })
-      doc.text('Payment Date', col6X + padding, textY, { width: col6Width - 2 * padding, align: 'center' })
-      doc.text('Parent/s', col7X + padding, textY, { width: col7Width - 2 * padding, align: 'center' })
+      doc.text('Parent Present', col3X + padding, textY, { width: col3Width - 2 * padding, align: 'center' })
+      doc.text('Payment', col4X + padding, textY, { width: col4Width - 2 * padding, align: 'center' })
+      doc.text('Payment Date', col5X + padding, textY, { width: col5Width - 2 * padding, align: 'center' })
+      doc.text('Parent', col6X + padding, textY, { width: col6Width - 2 * padding, align: 'center' })
 
       doc.y = headerY + rowHeight
     }
@@ -336,47 +347,51 @@ export default async function handler(req, res) {
         align: 'left'
       })
 
-      // Attendance
-      const attendanceText =
-        student.attendance_status === 'present'
-          ? 'PRESENT'
-          : student.attendance_status === 'absent'
-          ? 'ABSENT'
-          : 'NOT MARKED'
-      doc.text(attendanceText, col3X + padding, textY, {
+      // Parent Present
+      doc.text(student.parent_present ? 'YES' : 'NO', col3X + padding, textY, {
         width: col3Width - 2 * padding,
         align: 'center'
       })
 
-      // Parent Present
-      doc.text(student.parent_present ? 'YES' : 'NO', col4X + padding, textY, {
+      // Payment - Fixed logic to handle payments_enabled
+      let paymentText
+      if (!activity.payments_enabled) {
+        paymentText = 'N/A'
+      } else if (student.payment_paid === 1) {
+        paymentText = 'PAID'
+      } else if (student.payment_paid === 0) {
+        paymentText = 'UNPAID'
+      } else {
+        paymentText = 'NOT SET'
+      }
+
+      doc.text(paymentText, col4X + padding, textY, {
         width: col4Width - 2 * padding,
         align: 'center'
       })
 
-      // Payment
-      const paymentText = student.payment_paid === 1 ? 'PAID' : student.payment_paid === 0 ? 'UNPAID' : 'NOT SET'
-      doc.text(paymentText, col5X + padding, textY, {
+      // Payment Date (with full month and year) - Fixed to handle disabled payments
+      let payDate
+      if (!activity.payments_enabled) {
+        payDate = 'N/A'
+      } else {
+        payDate = student.payment_date
+          ? new Date(student.payment_date).toLocaleDateString('en-US', {
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric'
+            })
+          : '-'
+      }
+
+      doc.text(truncateText(payDate, col5Width), col5X + padding, textY, {
         width: col5Width - 2 * padding,
         align: 'center'
       })
 
-      // Payment Date (with full month and year)
-      const payDate = student.payment_date
-        ? new Date(student.payment_date).toLocaleDateString('en-US', {
-            month: 'long',
-            day: 'numeric',
-            year: 'numeric'
-          })
-        : '-'
-      doc.text(truncateText(payDate, col6Width), col6X + padding, textY, {
-        width: col6Width - 2 * padding,
-        align: 'center'
-      })
-
       // Parents
-      doc.text(truncateText(student.parents || 'None', col7Width), col7X + padding, textY, {
-        width: col7Width - 2 * padding,
+      doc.text(truncateText(student.parents || 'None', col6Width), col6X + padding, textY, {
+        width: col6Width - 2 * padding,
         align: 'left'
       })
 

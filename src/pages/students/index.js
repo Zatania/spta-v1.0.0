@@ -374,13 +374,13 @@ export default function StudentsPage() {
         return
       }
 
-      // For new students, require image
+      /* // For new students, require image
       if (!form.id && !form.picture) {
         alert('Please upload a student picture')
         setSaving(false)
 
         return
-      }
+      } */
 
       const formData = new FormData()
       formData.append('first_name', form.first_name)
@@ -697,11 +697,11 @@ export default function StudentsPage() {
                   Upload Picture
                 </Button>
               </label>
-              {!form.id && (
+              {/* {!form.id && (
                 <Typography variant='caption' display='block' color='textSecondary' mt={1}>
                   * Picture required for new students
                 </Typography>
-              )}
+              )} */}
             </Box>
           </Box>
 

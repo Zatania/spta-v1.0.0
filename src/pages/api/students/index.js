@@ -162,7 +162,7 @@ export default async function handler(req, res) {
         const picture_url = `/uploads/students/${uniqueFilename}` */
 
         const [ins] = await conn.query(
-          'INSERT INTO students (first_name, last_name, lrn, grade_id, section_id, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, NOW(), NOW())',
+          'INSERT INTO students (first_name, last_name, lrn, grade_id, section_id, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())',
           [first_name, last_name, lrn, grade_id, section_id]
         )
         const studentId = ins.insertId

@@ -679,7 +679,7 @@ export default function StudentsPage() {
         <DialogTitle>{form.id ? 'Edit Student' : 'Add Student'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
           {/* Student Picture Upload */}
-          <Box display='flex' alignItems='center' gap={2}>
+          {/* <Box display='flex' alignItems='center' gap={2}>
             <Avatar src={form.picture_preview} sx={{ width: 80, height: 80 }}>
               {form.first_name?.[0]}
               {form.last_name?.[0]}
@@ -697,15 +697,15 @@ export default function StudentsPage() {
                   Upload Picture
                 </Button>
               </label>
-              {/* {!form.id && (
+              {!form.id && (
                 <Typography variant='caption' display='block' color='textSecondary' mt={1}>
                   * Picture required for new students
                 </Typography>
-              )} */}
+              )}
             </Box>
           </Box>
 
-          <Divider />
+          <Divider /> */}
 
           {/* Basic Info */}
           <Box display='flex' gap={2}>

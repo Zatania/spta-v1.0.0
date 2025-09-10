@@ -60,7 +60,7 @@ export default async function handler(req, res) {
 
       const sql = `
         SELECT
-          st.id, st.first_name, st.last_name, st.lrn, st.grade_id, st.section_id, st.picture_url,
+          st.id, st.first_name, st.last_name, st.lrn, st.grade_id, st.section_id,
           g.name AS grade_name,
           s.name AS section_name,
           u.full_name AS teacher_name
@@ -113,17 +113,17 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Missing required fields' })
       }
 
-      // Require picture for new students
+      /* // Require picture for new students
       const pictureFile = Array.isArray(files.picture) ? files.picture[0] : files.picture
 
-      /* if (!pictureFile) {
+      if (!pictureFile) {
         return res.status(400).json({ message: 'Student picture is required' })
-      } */
+      }
 
       // Validate image file
       if (!pictureFile.mimetype?.startsWith('image/')) {
         return res.status(400).json({ message: 'Please upload a valid image file' })
-      }
+      } */
 
       // verify section exists & grade match
       const [secRows] = await db.query('SELECT id, grade_id FROM sections WHERE id = ? AND is_deleted = 0 LIMIT 1', [
@@ -151,7 +151,7 @@ export default async function handler(req, res) {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
-        // Generate unique filename
+        /* // Generate unique filename
         const fileExt = path.extname(pictureFile.originalFilename || pictureFile.newFilename)
         const uniqueFilename = `${Date.now()}-${Math.random().toString(36).substring(2)}${fileExt}`
         const finalPath = path.join(uploadDir, uniqueFilename)
@@ -159,11 +159,11 @@ export default async function handler(req, res) {
         // Move file to final location
         fs.renameSync(pictureFile.filepath, finalPath)
 
-        const picture_url = `/uploads/students/${uniqueFilename}`
+        const picture_url = `/uploads/students/${uniqueFilename}` */
 
         const [ins] = await conn.query(
-          'INSERT INTO students (first_name, last_name, lrn, grade_id, section_id, picture_url, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, NOW(), NOW())',
-          [first_name, last_name, lrn, grade_id, section_id, picture_url]
+          'INSERT INTO students (first_name, last_name, lrn, grade_id, section_id, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, NOW(), NOW())',
+          [first_name, last_name, lrn, grade_id, section_id]
         )
         const studentId = ins.insertId
 
@@ -190,10 +190,10 @@ export default async function handler(req, res) {
           conn.release().catch(() => {})
         }
 
-        // Clean up uploaded file on error
+        /* // Clean up uploaded file on error
         if (pictureFile?.filepath && fs.existsSync(pictureFile.filepath)) {
           fs.unlinkSync(pictureFile.filepath).catch(() => {})
-        }
+        } */
 
         console.error('Create student error', err)
         if (err && err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Duplicate entry' })

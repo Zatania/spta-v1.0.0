@@ -113,9 +113,10 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Missing required fields' })
       }
 
-      /* // Require picture for new students
+      // Require picture for new students
       const pictureFile = Array.isArray(files.picture) ? files.picture[0] : files.picture
-      if (!pictureFile) {
+
+      /* if (!pictureFile) {
         return res.status(400).json({ message: 'Student picture is required' })
       } */
 

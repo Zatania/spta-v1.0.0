@@ -3,34 +3,17 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]'
 import db from '../db' // adjust path
 
-/**
- * GET /api/sections
- * Query params:
- *  - search (optional) : searches section name and grade name (LIKE)
- *  - grade_id (optional)
- *  - assigned (optional) : '1' -> only sections that have a teacher, '0' -> only sections without a teacher
- *  - page (optional, default 1)
- *  - page_size (optional, default 25)
- *
- * Returns:
- *  { total, page, page_size, sections: [ { id, section_name, grade_id, grade_name, assigned (0/1), assigned_teacher: { id, full_name } | null } ] }
- */
 export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
-    // Handle adding a section
     if (req.method === 'POST') {
-      // Optional: restrict to admin only
-      // if (session.user.role !== 'admin') return res.status(403).json({ message: 'Admins only' })
-
       const { name, grade_id } = req.body
       if (!name || !grade_id) {
         return res.status(400).json({ message: 'Missing name or grade_id' })
       }
 
-      // Insert into DB
       const insertSql = `
         INSERT INTO sections (name, grade_id, is_deleted)
         VALUES (?, ?, 0)
@@ -38,11 +21,7 @@ export default async function handler(req, res) {
       try {
         const [result] = await db.query(insertSql, [name, grade_id])
 
-        return res.status(201).json({
-          id: result.insertId,
-          name,
-          grade_id
-        })
+        return res.status(201).json({ id: result.insertId, name, grade_id })
       } catch (dbErr) {
         console.error('POST /api/sections insert error:', dbErr)
 
@@ -50,7 +29,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Handle fetching sections (GET)
     if (req.method === 'GET') {
       const { search = '', grade_id = null, assigned = null, page = 1, page_size = 25 } = req.query
 
@@ -78,6 +56,7 @@ export default async function handler(req, res) {
 
       const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
 
+      // Count
       const countSql = `
         SELECT COUNT(*) AS total
         FROM sections s
@@ -87,22 +66,23 @@ export default async function handler(req, res) {
       const [countRows] = await db.query(countSql, params)
       const total = countRows[0]?.total ?? 0
 
+      // NOTE: no GROUP BY needed; schema guarantees 0..1 teacher per section (unique on section_id)
       const sql = `
         SELECT
           s.id,
           s.name AS section_name,
           s.grade_id,
+          g.id   AS grade_sort_id,        -- for stable ORDER BY
           g.name AS grade_name,
           CASE WHEN ts.user_id IS NULL THEN 0 ELSE 1 END AS assigned,
-          u.id AS assigned_teacher_id,
+          u.id   AS assigned_teacher_id,
           u.full_name AS assigned_teacher_name
         FROM sections s
         JOIN grades g ON g.id = s.grade_id
         LEFT JOIN teacher_sections ts ON ts.section_id = s.id
         LEFT JOIN users u ON u.id = ts.user_id AND u.is_deleted = 0
         ${whereSql}
-        GROUP BY s.id
-        ORDER BY g.id, s.name
+        ORDER BY grade_sort_id, s.name
         LIMIT ? OFFSET ?
       `
       const finalParams = [...params, limit, offset]

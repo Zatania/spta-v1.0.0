@@ -3,14 +3,8 @@ import bcrypt from 'bcryptjs'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]'
 import db from '../db'
+import { getCurrentSchoolYearId } from '../lib/schoolYear'
 
-/**
- * PUT /api/teachers/:id
- *   body: { full_name, email, username, password? (optional), grade_id, section_id }
- * DELETE /api/teachers/:id  (soft-delete)
- *
- * Admin-only for update/delete
- */
 export default async function handler(req, res) {
   const { id } = req.query
   const teacherId = Number(id)
@@ -27,21 +21,28 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Missing required fields' })
       }
 
-      // Verify teacher exists
+      const currentSyId = await getCurrentSchoolYearId()
+
+      // Verify teacher exists (and is teacher)
       const [uRows] = await db.query(
-        `SELECT u.id FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id WHERE u.id = ? AND r.name = 'teacher' AND u.is_deleted = 0 LIMIT 1`,
+        `SELECT u.id
+         FROM users u
+         JOIN user_roles ur ON ur.user_id = u.id
+         JOIN roles r ON r.id = ur.role_id
+         WHERE u.id = ? AND r.name = 'teacher' AND u.is_deleted = 0
+         LIMIT 1`,
         [teacherId]
       )
       if (!uRows.length) return res.status(404).json({ message: 'Teacher not found' })
 
-      // uniqueness checks
+      // Uniqueness checks
       const [existing] = await db.query(
         'SELECT id FROM users WHERE (username = ? OR email = ?) AND id != ? AND is_deleted = 0 LIMIT 1',
         [username, email, teacherId]
       )
       if (existing.length) return res.status(409).json({ message: 'Username or email already used' })
 
-      // verify section exists and not deleted
+      // Verify section and grade
       const [secRows] = await db.query('SELECT id, grade_id FROM sections WHERE id = ? AND is_deleted = 0 LIMIT 1', [
         section_id
       ])
@@ -50,12 +51,12 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Section does not belong to the given grade' })
       }
 
-      // check section not assigned to someone else
+      // Section not assigned to someone else (this SY)
       const [secAssign] = await db.query(
-        'SELECT user_id FROM teacher_sections WHERE section_id = ? AND user_id != ? LIMIT 1',
-        [section_id, teacherId]
+        'SELECT user_id FROM teacher_sections WHERE section_id = ? AND school_year_id = ? AND user_id != ? LIMIT 1',
+        [section_id, currentSyId, teacherId]
       )
-      if (secAssign.length) return res.status(400).json({ message: 'Section already assigned to another teacher' })
+      if (secAssign.length) return res.status(400).json({ message: 'Section already assigned (current SY)' })
 
       let conn
       try {
@@ -77,9 +78,16 @@ export default async function handler(req, res) {
           ])
         }
 
-        // Reassign teacher_sections: delete existing mapping(s), insert new one
-        await conn.query('DELETE FROM teacher_sections WHERE user_id = ?', [teacherId])
-        await conn.query('INSERT INTO teacher_sections (user_id, section_id) VALUES (?, ?)', [teacherId, section_id])
+        // Reassign mapping **for current school year only**
+        await conn.query('DELETE FROM teacher_sections WHERE user_id = ? AND school_year_id = ?', [
+          teacherId,
+          currentSyId
+        ])
+        await conn.query('INSERT INTO teacher_sections (user_id, section_id, school_year_id) VALUES (?, ?, ?)', [
+          teacherId,
+          section_id,
+          currentSyId
+        ])
 
         await conn.commit()
         conn.release()
@@ -102,42 +110,39 @@ export default async function handler(req, res) {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
-        // 1. Soft delete teacher
+        // 1) Soft delete the teacher
         await conn.query('UPDATE users SET is_deleted = 1, deleted_at = NOW() WHERE id = ?', [teacherId])
         await conn.query('DELETE FROM user_roles WHERE user_id = ?', [teacherId])
+
+        // 2) Remove all teacher-section mappings (across years)
         await conn.query('DELETE FROM teacher_sections WHERE user_id = ?', [teacherId])
 
-        // 2. Find all activities created by this teacher
+        // 3) Optional: soft-delete activities created by this teacher
         const [activities] = await conn.query('SELECT id FROM activities WHERE created_by = ? AND is_deleted = 0', [
           teacherId
         ])
         const activityIds = activities.map(a => a.id)
-
         if (activityIds.length > 0) {
-          // 2a. Soft delete assignments linked to those activities
           await conn.query(
-            'UPDATE activity_assignments SET is_deleted = 1, deleted_at = NOW() WHERE activity_id IN (?)',
+            'UPDATE activity_assignments SET /* no is_deleted here in schema */ assignment_key = assignment_key WHERE activity_id IN (?)',
             [activityIds]
           )
-
-          // 2b. Soft delete the activities
           await conn.query('UPDATE activities SET is_deleted = 1, deleted_at = NOW() WHERE id IN (?)', [activityIds])
         }
 
         await conn.commit()
         conn.release()
 
-        return res.status(200).json({ message: 'Teacher and related activities soft-deleted' })
+        return res.status(200).json({ message: 'Teacher and related assignments updated' })
       } catch (err) {
         if (conn) {
           try {
             await conn.rollback()
-          } catch (_) {}
+          } catch {}
           try {
             conn.release()
-          } catch (_) {}
+          } catch {}
         }
-
         console.error(`DELETE /api/teachers/${teacherId} error:`, err)
 
         return res.status(500).json({ message: 'Internal server error' })

@@ -9,42 +9,73 @@ export default async function handler(req, res) {
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
     if (req.method === 'GET') {
-      // Get all non-deleted parents for dropdown selection
-      const { search = '', page = 1, page_size = 1000 } = req.query
-      const limit = Math.max(1, Math.min(1000, Number(page_size) || 1000))
-      const offset = (Math.max(1, Number(page) || 1) - 1) * limit
+      // Get parents for dropdown / search with pagination
+      const { search = '', page = 1, page_size = 100 } = req.query
+      const pageNum = Math.max(1, parseInt(page, 10) || 1)
+      const limit = Math.max(1, Math.min(1000, parseInt(page_size, 10) || 100))
+      const offset = (pageNum - 1) * limit
 
       const where = ['p.is_deleted = 0']
       const params = []
 
-      if (search) {
+      if (search && search.trim() !== '') {
+        const s = `%${search.trim()}%`
         where.push(
           '(p.first_name LIKE ? OR p.last_name LIKE ? OR CONCAT(p.first_name," ",p.last_name) LIKE ? OR p.contact_info LIKE ?)'
         )
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
+        params.push(s, s, s, s)
       }
 
       const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
 
+      // total count for pagination
+      const countSql = `SELECT COUNT(DISTINCT p.id) AS total FROM parents p ${whereSql}`
+      const [countRows] = await db.query(countSql, params)
+      const total = countRows?.[0]?.total ?? 0
+
       const sql = `
-        SELECT p.id, p.first_name, p.last_name, p.contact_info, sp.relation,
-               COUNT(sp.student_id) as student_count
+        SELECT
+          p.id,
+          p.first_name,
+          p.last_name,
+          p.contact_info,
+          -- Concatenate relation(s) if any (DISTINCT)
+          GROUP_CONCAT(DISTINCT COALESCE(sp.relation, '') SEPARATOR ',') AS relations,
+          COUNT(DISTINCT sp.student_id) AS student_count
         FROM parents p
         LEFT JOIN student_parents sp ON sp.parent_id = p.id
         ${whereSql}
-        GROUP BY p.id, p.first_name, p.last_name, p.contact_info, sp.relation
+        GROUP BY p.id, p.first_name, p.last_name, p.contact_info
         ORDER BY p.last_name, p.first_name
         LIMIT ? OFFSET ?
       `
       const finalParams = [...params, limit, offset]
       const [rows] = await db.query(sql, finalParams)
 
-      return res.status(200).json(rows)
+      // normalize relations to array (if needed by UI)
+      const parents = rows.map(r => ({
+        id: r.id,
+        first_name: r.first_name,
+        last_name: r.last_name,
+        contact_info: r.contact_info,
+        relations: r.relations ? r.relations.split(',').filter(Boolean) : [],
+        student_count: Number(r.student_count || 0)
+      }))
+
+      return res.status(200).json({
+        parents,
+        pagination: {
+          page: pageNum,
+          page_size: limit,
+          total: Number(total),
+          total_pages: Math.ceil(total / limit)
+        }
+      })
     }
 
     if (req.method === 'POST') {
       // Create new parent
-      const { first_name, last_name, contact_info = '', relation = '' } = req.body
+      const { first_name, last_name, contact_info = '' } = req.body
 
       if (!first_name || !last_name) {
         return res.status(400).json({ message: 'First name and last name are required' })

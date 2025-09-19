@@ -23,8 +23,13 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  CircularProgress
+  CircularProgress,
+  TextField,
+  InputAdornment
 } from '@mui/material'
+import Autocomplete from '@mui/material/Autocomplete'
+import Checkbox from '@mui/material/Checkbox'
+import PeopleIcon from '@mui/icons-material/People'
 import { DataGrid } from '@mui/x-data-grid'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import DownloadIcon from '@mui/icons-material/Download'
@@ -65,10 +70,23 @@ export default function TeacherDashboard() {
 
   const attendanceDetailsRef = useRef(null)
 
+  // --- Parent filter states ---
+  const [parentFilter, setParentFilter] = useState([]) // array of parent objects
+  const [parentOptions, setParentOptions] = useState([])
+  const [parentLoading, setParentLoading] = useState(false)
+  const [parentPupils, setParentPupils] = useState({}) // { parentId: [students...] }
+
+  // helper to build parent_ids param if any
+  const parentIdsParam = () => (parentFilter && parentFilter.length ? parentFilter.map(p => p.id).join(',') : undefined)
+
   const fetchSummary = async () => {
     setLoading(true)
     try {
-      const { data } = await axios.get('/api/teacher/attendance-summary')
+      const { data } = await axios.get('/api/teacher/attendance-summary', {
+        params: {
+          parent_ids: parentIdsParam()
+        }
+      })
 
       const activities = (data.activities || []).map(a => ({
         id: a.id,
@@ -80,12 +98,9 @@ export default function TeacherDashboard() {
         unpaid_count: a.unpaid_count
       }))
       setRows(activities)
-
-      // Remove auto-selection - only load details when user clicks
-      // if (activities.length > 0 && !selectedActivity) {
-      //   setSelectedActivity(activities[0])
-      //   fetchStudents(activities[0].id)
-      // }
+    } catch (err) {
+      console.error('Failed to fetch summary', err)
+      setRows([])
     } finally {
       setLoading(false)
     }
@@ -98,7 +113,8 @@ export default function TeacherDashboard() {
       const { data } = await axios.get(`/api/teacher/activity/${activityId}/students`, {
         params: {
           page: 1,
-          page_size: 1000 // Get all students for the selected activity
+          page_size: 1000, // Get all students for the selected activity
+          parent_ids: parentIdsParam()
         }
       })
       setStudents(data.students || [])
@@ -110,8 +126,69 @@ export default function TeacherDashboard() {
     }
   }
 
+  // Parent fetch helpers
+  const fetchParents = async (q = '') => {
+    setParentLoading(true)
+    try {
+      const res = await axios.get('/api/parents', {
+        params: {
+          search: q,
+          page: 1,
+          page_size: 50
+        }
+      })
+
+      // endpoint returns { parents: [...], pagination: {...} }
+      setParentOptions(res.data.parents ?? [])
+    } catch (e) {
+      console.error('Failed to fetch parents', e)
+      setParentOptions([])
+    } finally {
+      setParentLoading(false)
+    }
+  }
+
+  const fetchPupilsForParents = async parents => {
+    if (!parents || parents.length === 0) {
+      setParentPupils({})
+
+      return
+    }
+    try {
+      const ids = parents.map(p => p.id).join(',')
+      const res = await axios.get('/api/parents/pupils', { params: { parent_ids: ids } })
+
+      // expected res.data: { parent_id: [{student}, ...], ... }
+      setParentPupils(res.data || {})
+    } catch (err) {
+      console.error('Failed to fetch pupils for parents', err)
+      setParentPupils({})
+    }
+  }
+
+  useEffect(() => {
+    // initial load
+    fetchParents() // preload parent options
+  }, [])
+
+  // Refresh summary when parent filter changes
   useEffect(() => {
     fetchSummary()
+
+    // if an activity is selected, re-fetch its students using the new filter
+    if (selectedActivity) {
+      fetchStudents(selectedActivity.id)
+    }
+
+    // also update pupils listing
+    fetchPupilsForParents(parentFilter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentFilter])
+
+  useEffect(() => {
+    // initial summary load
+    fetchSummary()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleActivitySelect = activity => {
@@ -147,19 +224,11 @@ export default function TeacherDashboard() {
     try {
       const resp = await axios.get(url, { responseType: 'blob', withCredentials: true })
 
-      console.log('preview response status (axios):', resp.status)
-      console.log(
-        'preview response content-type:',
-        resp.headers && (resp.headers['content-type'] || resp.headers['Content-Type'])
-      )
-
       if (!resp || !resp.data) {
         throw new Error('No data received from preview endpoint')
       }
 
       const blob = resp.data
-
-      // Read first bytes to check file signature
       const ab = await blob.arrayBuffer()
       const headerBytes = new Uint8Array(ab).slice(0, 8)
       let headerStr = ''
@@ -168,19 +237,14 @@ export default function TeacherDashboard() {
       } catch (e) {
         headerStr = ''
       }
-      console.log('preview blob header (first 8 chars):', headerStr)
 
-      // PDFs start with "%PDF-"
       if (!headerStr.startsWith('%PDF')) {
-        // not a valid PDF — try to show the first part of the text body for debugging
         let bodyText = ''
         try {
-          // convert arrayBuffer to string (may contain HTML)
           bodyText = new TextDecoder().decode(new Uint8Array(ab).slice(0, 2000))
         } catch (e) {
           bodyText = '<could not decode response text>'
         }
-        console.warn('Preview endpoint returned non-PDF payload:', bodyText.slice(0, 1000))
         setPdfError(
           `Preview did not return a valid PDF. Server returned something else (first 1000 chars):\n\n${bodyText.slice(
             0,
@@ -191,7 +255,6 @@ export default function TeacherDashboard() {
         return
       }
 
-      // Valid PDF header — create a new blob from the buffer and show
       const validPdfBlob = new Blob([ab], { type: 'application/pdf' })
       const blobUrl = URL.createObjectURL(validPdfBlob)
       setPdfPreviewUrl(blobUrl)
@@ -218,7 +281,6 @@ export default function TeacherDashboard() {
         /\s+/g,
         '_'
       )
-
     a.href = pdfPreviewUrl
     a.download = filename
     a.click()
@@ -271,7 +333,9 @@ export default function TeacherDashboard() {
 
     setDownloadingReport(true)
     try {
-      const url = `/api/teacher/reports/attendance?activity_id=${selectedActivity.id}`
+      const url = `/api/teacher/reports/attendance?activity_id=${selectedActivity.id}&parent_ids=${
+        parentIdsParam() || ''
+      }`
       const resp = await fetch(url)
 
       if (!resp.ok) {
@@ -350,8 +414,6 @@ export default function TeacherDashboard() {
       tooltip: {
         mode: 'index',
         intersect: false,
-
-        // format tooltip values as integers
         callbacks: {
           label: function (context) {
             const v = context.raw
@@ -377,10 +439,7 @@ export default function TeacherDashboard() {
         },
         beginAtZero: true,
         ticks: {
-          // force integer ticks
           stepSize: 1,
-
-          // prevent decimal formatting — show whole numbers only
           callback: function (value) {
             return Number(value).toString()
           }
@@ -439,8 +498,116 @@ export default function TeacherDashboard() {
     }
   }, [pdfPreviewUrl])
 
+  // Render top filters: parent filter + refresh
+  const renderTopFilters = () => (
+    <Box display='flex' justifyContent='space-between' alignItems='center' sx={{ mb: 3 }}>
+      <Box display='flex' gap={2} alignItems='center'>
+        <Autocomplete
+          multiple
+          size='small'
+          sx={{ minWidth: 360 }}
+          options={parentOptions}
+          getOptionLabel={option => `${option.last_name}, ${option.first_name}`}
+          filterSelectedOptions
+          value={parentFilter}
+          onChange={(_e, value) => {
+            setParentFilter(value)
+          }}
+          onInputChange={(_e, value) => {
+            if (value && value.length >= 2) fetchParents(value)
+          }}
+          loading={parentLoading}
+          renderOption={(props, option) => (
+            <li {...props} key={option.id}>
+              <Checkbox sx={{ mr: 1 }} size='small' checked={parentFilter.some(p => p.id === option.id)} />
+              <Avatar sx={{ width: 24, height: 24, mr: 1 }}>{(option.first_name || '').charAt(0)}</Avatar>
+              {option.last_name}, {option.first_name}
+            </li>
+          )}
+          renderInput={params => (
+            <TextField
+              {...params}
+              placeholder='Filter by parent (type at least 2 chars)'
+              InputProps={{
+                ...params.InputProps,
+                startAdornment: (
+                  <InputAdornment position='start'>
+                    <PeopleIcon />
+                  </InputAdornment>
+                )
+              }}
+            />
+          )}
+        />
+
+        <Button
+          variant='outlined'
+          onClick={() => {
+            setParentFilter([])
+            setParentPupils({})
+          }}
+        >
+          Clear Parent Filter
+        </Button>
+      </Box>
+
+      <Box>
+        <Button
+          onClick={() => {
+            fetchSummary()
+            if (selectedActivity) {
+              fetchStudents(selectedActivity.id)
+            }
+          }}
+          variant='contained'
+        >
+          Refresh
+        </Button>
+      </Box>
+    </Box>
+  )
+
+  const renderSelectedParentsPupils = () => {
+    if (!parentFilter || parentFilter.length === 0) return null
+
+    return (
+      <Box sx={{ mb: 2 }}>
+        <Typography variant='subtitle2'>Selected Parents & Pupils</Typography>
+        <Stack direction='row' spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
+          {parentFilter.map(p => (
+            <Box key={p.id} sx={{ border: '1px solid #eee', p: 1, borderRadius: 1, minWidth: 220 }}>
+              <Typography variant='body2' sx={{ fontWeight: 600 }}>{`${p.last_name}, ${p.first_name}`}</Typography>
+              <Typography variant='caption' color='text.secondary'>
+                Pupils:
+              </Typography>
+              <Box>
+                {(parentPupils[p.id] || []).map(s => (
+                  <Chip
+                    key={s.id}
+                    label={`${s.last_name}, ${s.first_name} (${s.lrn})`}
+                    size='small'
+                    sx={{ mr: 0.5, mt: 0.5 }}
+                  />
+                ))}
+                {(parentPupils[p.id] || []).length === 0 && (
+                  <Typography variant='caption' color='text.secondary' sx={{ display: 'block' }}>
+                    No pupils found
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+          ))}
+        </Stack>
+      </Box>
+    )
+  }
+
   return (
     <Box p={3}>
+      {/* Top parent filters */}
+      {renderTopFilters()}
+      {renderSelectedParentsPupils()}
+
       {/* Charts Section */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {/* Attendance Chart */}
@@ -648,17 +815,6 @@ export default function TeacherDashboard() {
                           >
                             Preview
                           </Button>
-                          {/* <Stack direction='row' spacing={1}>
-                            <Button
-                              size='small'
-                              startIcon={<DownloadIcon />}
-                              onClick={() => handleDownloadForm(student)}
-                              variant='outlined'
-                              color='secondary'
-                            >
-                              Download
-                            </Button>
-                          </Stack> */}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -670,7 +826,6 @@ export default function TeacherDashboard() {
         </Card>
       )}
 
-      {/* PDF Preview Dialog */}
       {/* PDF Preview Dialog */}
       <Dialog
         open={pdfPreviewOpen}

@@ -7,12 +7,23 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
 
   const session = await getServerSession(req, res, authOptions)
-  if (!session || session.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' })
+  if (!session || session.user.role !== 'teacher') {
+    return res.status(403).json({ message: 'Forbidden' })
+  }
 
   const teacherId = session.user.id
+  const { parent_ids } = req.query
+  let parentIdList = []
+
+  if (parent_ids) {
+    parentIdList = parent_ids
+      .split(',')
+      .map(id => parseInt(id.trim()))
+      .filter(id => !isNaN(id))
+  }
+
   try {
-    // List activities that are assigned to the teacher's sections (or teacher created but only if assigned to their sections)
-    // We join activity_assignments -> teacher_sections to ensure only activities assigned to teacher's sections are returned
+    // Get activities for teacher's sections
     const sql = `
       SELECT DISTINCT a.id, a.title, a.activity_date
       FROM activities a
@@ -23,13 +34,12 @@ export default async function handler(req, res) {
     `
     const [activities] = await db.query(sql, [teacherId])
 
-    // For each activity compute present/absent/paid/unpaid totals (aggregate across teacher's sections)
     if (!activities.length) return res.status(200).json({ activities: [] })
 
     const activityIds = activities.map(a => a.id)
 
-    const [totals] = await db.query(
-      `
+    // Totals query (with optional parent filter)
+    let totalsQuery = `
       SELECT
           aa.activity_id,
           COALESCE(SUM(att.present_count),0)   AS present_count,
@@ -44,6 +54,13 @@ export default async function handler(req, res) {
               SUM(at.parent_present = 0) AS absent_count
           FROM attendance at
           INNER JOIN students s ON s.id = at.student_id AND s.is_deleted = 0
+          ${
+            parentIdList.length
+              ? `INNER JOIN student_parents sp ON sp.student_id = s.id AND sp.parent_id IN (${parentIdList
+                  .map(() => '?')
+                  .join(',')})`
+              : ''
+          }
           GROUP BY at.activity_assignment_id
       ) att ON att.activity_assignment_id = aa.id
       LEFT JOIN (
@@ -53,24 +70,35 @@ export default async function handler(req, res) {
               SUM(p.paid = 0) AS unpaid_count
           FROM payments p
           INNER JOIN students s ON s.id = p.student_id AND s.is_deleted = 0
+          ${
+            parentIdList.length
+              ? `INNER JOIN student_parents sp2 ON sp2.student_id = s.id AND sp2.parent_id IN (${parentIdList
+                  .map(() => '?')
+                  .join(',')})`
+              : ''
+          }
           GROUP BY p.activity_assignment_id
       ) pay ON pay.activity_assignment_id = aa.id
       WHERE aa.activity_id IN (${activityIds.map(() => '?').join(',')})
         AND aa.section_id IN (
             SELECT section_id FROM teacher_sections WHERE user_id = ?
         )
-      GROUP BY aa.activity_id;
+      GROUP BY aa.activity_id
+    `
 
+    const totalsParams = [
+      ...(parentIdList.length ? parentIdList : []),
+      ...(parentIdList.length ? parentIdList : []),
+      ...activityIds,
+      teacherId
+    ]
 
-    `,
-      [...activityIds, teacherId]
-    )
+    const [totals] = await db.query(totalsQuery, totalsParams)
 
     // Map totals by activity_id
     const totalsByActivity = new Map()
     for (const t of totals) totalsByActivity.set(t.activity_id, t)
 
-    // attach stats
     const out = activities.map(a => {
       const t = totalsByActivity.get(a.id) || {}
 

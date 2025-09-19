@@ -1,6 +1,8 @@
 // src/pages/dashboard/index.js
 import { useState, useEffect, useContext, useMemo, useRef } from 'react'
 import {
+  Avatar,
+  Checkbox,
   Grid,
   Card,
   CardContent,
@@ -27,6 +29,7 @@ import {
   DialogActions,
   IconButton
 } from '@mui/material'
+import Autocomplete from '@mui/material/Autocomplete'
 import { AbilityContext } from 'src/layouts/components/acl/Can'
 import UserDetails from 'src/views/pages/dashboard/UserDetails'
 import CloseIcon from '@mui/icons-material/Close'
@@ -79,6 +82,11 @@ const Dashboard = () => {
   // filters
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
+
+  const [parentFilter, setParentFilter] = useState([]) // array of parent objects
+  const [parentOptions, setParentOptions] = useState([])
+  const [parentLoading, setParentLoading] = useState(false)
+  const [parentPupils, setParentPupils] = useState({}) // { parentId: [students...] }
 
   // Navigation state
   const [currentView, setCurrentView] = useState(VIEW_TYPES.OVERVIEW)
@@ -150,6 +158,9 @@ const Dashboard = () => {
   const [previewEndpoint, setPreviewEndpoint] = useState('')
 
   // ---------- Fetchers ----------
+
+  const parentIdsParam = () => (parentFilter && parentFilter.length ? parentFilter.map(p => p.id).join(',') : undefined)
+
   const fetchOverview = async () => {
     setLoadingOverview(true)
     setErrorOverview(null)
@@ -271,11 +282,11 @@ const Dashboard = () => {
         params: {
           view: 'paymentsByGrade',
           from_date: fromDate || undefined,
-          to_date: toDate || undefined
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam()
         }
       })
 
-      // expected res.data.payments_by_grade: [{ grade_id, grade_name, paid_count, unpaid_count }, ...]
       setPaymentsByGrade(res.data.payments_by_grade ?? [])
       setPaymentsLevel(PAYMENTS_LEVELS.BY_GRADE)
     } catch (err) {
@@ -296,11 +307,11 @@ const Dashboard = () => {
           view: 'paymentsBySection',
           grade_id: gradeId,
           from_date: fromDate || undefined,
-          to_date: toDate || undefined
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam()
         }
       })
 
-      // expected res.data.payments_by_section: [{ section_id, section_name, paid_count, unpaid_count }, ...]
       setPaymentsBySection(res.data.payments_by_section ?? [])
       setPaymentsLevel(PAYMENTS_LEVELS.BY_SECTION)
     } catch (err) {
@@ -318,7 +329,8 @@ const Dashboard = () => {
         params: {
           view: 'activitiesOverview',
           from_date: fromDate || undefined,
-          to_date: toDate || undefined
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam()
         }
       })
       setActivitiesOverviewData(res.data.activities_by_grade ?? [])
@@ -340,7 +352,8 @@ const Dashboard = () => {
           view: 'activitiesByGrade',
           grade_id: gradeId,
           from_date: fromDate || undefined,
-          to_date: toDate || undefined
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam()
         }
       })
       setActivitiesByGrade(res.data.activities_by_section ?? [])
@@ -362,7 +375,8 @@ const Dashboard = () => {
           view: 'activitiesBySection',
           section_id: sectionId,
           from_date: fromDate || undefined,
-          to_date: toDate || undefined
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam()
         }
       })
       setActivitiesSectionActivities(res.data.section_activities ?? [])
@@ -384,7 +398,8 @@ const Dashboard = () => {
           activity_id: activityId,
           section_id: sectionId,
           page: 1,
-          page_size: 1000
+          page_size: 1000,
+          parent_ids: parentIdsParam()
         }
       })
       setActivitiesStudents(res.data.students ?? [])
@@ -392,6 +407,37 @@ const Dashboard = () => {
       setErrorActivitiesOverview(err?.response?.data?.message ?? 'Failed to load activity students')
     } finally {
       setLoadingActivitiesStudents(false)
+    }
+  }
+
+  // --- NEW: Parent search / fetch helpers ---
+  const fetchParents = async (q = '') => {
+    setParentLoading(true)
+    try {
+      const res = await axios.get('/api/parents', { params: { q } })
+      setParentOptions(res.data.parents ?? [])
+    } catch (e) {
+      console.error('Failed to fetch parents', e)
+    } finally {
+      setParentLoading(false)
+    }
+  }
+
+  const fetchPupilsForParents = async parents => {
+    if (!parents || parents.length === 0) {
+      setParentPupils({})
+
+      return
+    }
+    try {
+      const ids = parents.map(p => p.id).join(',')
+      const res = await axios.get('/api/parents/pupils', { params: { parent_ids: ids } })
+
+      // expected res.data: { parent_id: [{student}, ...], ... }
+      setParentPupils(res.data || {})
+    } catch (err) {
+      console.error('Failed to fetch pupils for parents', err)
+      setParentPupils({})
     }
   }
 
@@ -675,8 +721,18 @@ const Dashboard = () => {
   useEffect(() => {
     fetchOverview()
     fetchByGrade()
-    fetchActivitiesOverview() // Add this line
-  }, [fromDate, toDate])
+    fetchActivitiesOverview()
+  }, [fromDate, toDate, parentFilter])
+
+  // load parent options on mount (or you can lazy-load via Autocomplete's onInputChange)
+  useEffect(() => {
+    fetchParents()
+  }, [])
+
+  // fetch pupils whenever parentFilter changes
+  useEffect(() => {
+    fetchPupilsForParents(parentFilter)
+  }, [parentFilter])
 
   // when gradeSections are loaded for a selected grade, scroll to the sections area
   useEffect(() => {
@@ -2059,12 +2115,144 @@ const Dashboard = () => {
     </Dialog>
   )
 
+  const renderTopFilters = () => (
+    <Stack direction='row' spacing={2} alignItems='center' justifyContent='space-between' sx={{ mb: 2 }}>
+      <Box display='flex' gap={2} alignItems='center'>
+        <TextField
+          label='From'
+          type='date'
+          size='small'
+          value={fromDate}
+          onChange={e => setFromDate(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+        />
+        <TextField
+          label='To'
+          type='date'
+          size='small'
+          value={toDate}
+          onChange={e => setToDate(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+        />
+
+        <Autocomplete
+          multiple
+          size='small'
+          sx={{ minWidth: 320 }}
+          options={parentOptions}
+          getOptionLabel={option => `${option.last_name}, ${option.first_name}`}
+          filterSelectedOptions
+          value={parentFilter}
+          onChange={(_e, value) => {
+            setParentFilter(value)
+
+            // other fetches will run automatically because parentFilter is in the useEffect deps
+          }}
+          onInputChange={(_e, value) => {
+            // lazy search parents
+            if (value && value.length >= 2) fetchParents(value)
+          }}
+          loading={parentLoading}
+          renderOption={(props, option) => (
+            <li {...props} key={option.id}>
+              <Checkbox sx={{ mr: 1 }} size='small' checked={parentFilter.some(p => p.id === option.id)} />
+              <Avatar sx={{ width: 24, height: 24, mr: 1 }}>{(option.first_name || '').charAt(0)}</Avatar>
+              {option.last_name}, {option.first_name}
+            </li>
+          )}
+          renderInput={params => (
+            <TextField
+              {...params}
+              placeholder='Filter by parent (type at least 2 chars)'
+              InputProps={{
+                ...params.InputProps,
+                startAdornment: (
+                  <InputAdornment position='start'>
+                    <PeopleIcon />
+                  </InputAdornment>
+                )
+              }}
+            />
+          )}
+        />
+
+        <Button
+          variant='outlined'
+          onClick={() => {
+            setParentFilter([])
+            setParentPupils({})
+          }}
+        >
+          Clear Parent Filter
+        </Button>
+      </Box>
+
+      <Box>
+        <Button
+          onClick={() => {
+            fetchOverview()
+            fetchByGrade()
+            if (currentView === VIEW_TYPES.ACTIVITIES && selectedSection) {
+              fetchSectionActivities(selectedSection.section_id)
+            } else if (currentView === VIEW_TYPES.STUDENTS && selectedActivity && selectedSection) {
+              fetchActivityStudents(
+                selectedActivity.id,
+                selectedSection.section_id,
+                studentsPage,
+                studentsPageSize,
+                studentsSearch
+              )
+            }
+          }}
+          variant='contained'
+        >
+          Refresh
+        </Button>
+      </Box>
+    </Stack>
+  )
+
+  const renderSelectedParentsPupils = () => {
+    if (!parentFilter || parentFilter.length === 0) return null
+
+    return (
+      <Box sx={{ mb: 2 }}>
+        <Typography variant='subtitle2'>Selected Parents & Pupils</Typography>
+        <Stack direction='row' spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
+          {parentFilter.map(p => (
+            <Box key={p.id} sx={{ border: '1px solid #eee', p: 1, borderRadius: 1, minWidth: 220 }}>
+              <Typography variant='body2' sx={{ fontWeight: 600 }}>{`${p.last_name}, ${p.first_name}`}</Typography>
+              <Typography variant='caption' color='text.secondary'>
+                Pupils:
+              </Typography>
+              <Box>
+                {(parentPupils[p.id] || []).map(s => (
+                  <Chip
+                    key={s.id}
+                    label={`${s.last_name}, ${s.first_name} (${s.lrn})`}
+                    size='small'
+                    sx={{ mr: 0.5, mt: 0.5 }}
+                  />
+                ))}
+                {(parentPupils[p.id] || []).length === 0 && (
+                  <Typography variant='caption' color='text.secondary' sx={{ display: 'block' }}>
+                    No pupils found
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+          ))}
+        </Stack>
+      </Box>
+    )
+  }
+
   // ---------- UI ----------
   return (
     <Grid container spacing={3}>
       <Grid item xs={12}>
         {/* Date filters and refresh (always visible) */}
-        <Stack direction='row' spacing={2} alignItems='center' justifyContent='space-between' sx={{ mb: 2 }}>
+        {/* <Stack direction='row' spacing={2} alignItems='center' justifyContent='space-between' sx={{ mb: 2 }}>
           <Box display='flex' gap={2} alignItems='center'>
             <TextField
               label='From'
@@ -2115,7 +2303,13 @@ const Dashboard = () => {
               Refresh
             </Button>
           </Box>
-        </Stack>
+        </Stack> */}
+
+        {/* Top filters (includes date + parent filter + refresh) */}
+        {renderTopFilters()}
+
+        {/* Optionally render the selected parents and their pupils so the admin/teacher sees who is included */}
+        {renderSelectedParentsPupils()}
 
         {/* Breadcrumbs */}
         {renderBreadcrumbs()}

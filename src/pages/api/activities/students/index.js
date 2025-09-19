@@ -1,13 +1,18 @@
 // pages/api/activities/students.js
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '../auth/[...nextauth]'
 import db from '../../db'
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return res.status(405).json({ message: 'Method not allowed' })
-  }
-
   try {
-    const { activity_id, section_id, page = 1, page_size = 50, search = '' } = req.query
+    const session = await getServerSession(req, res, authOptions)
+    if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+    if (req.method !== 'GET') {
+      return res.status(405).json({ message: 'Method not allowed' })
+    }
+
+    const { activity_id, section_id, page = 1, page_size = 50, search = '', parent_ids = '' } = req.query
 
     if (!activity_id) {
       return res.status(400).json({ message: 'activity_id is required' })
@@ -18,35 +23,51 @@ export default async function handler(req, res) {
     }
 
     // Convert pagination params to integers
-    const pageNum = parseInt(page) || 1
-    const pageSize = parseInt(page_size) || 50
+    const pageNum = Math.max(1, parseInt(page, 10) || 1)
+    const pageSize = Math.max(1, Math.min(1000, parseInt(page_size, 10) || 50))
     const offset = (pageNum - 1) * pageSize
 
+    // Parse parent_ids if present
+    let parentIdsList = []
+    if (parent_ids && String(parent_ids).trim() !== '') {
+      parentIdsList = String(parent_ids)
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(v => parseInt(v, 10))
+        .filter(Number.isFinite)
+
+      const MAX_PARENTS = 50
+      if (parentIdsList.length > MAX_PARENTS) {
+        return res.status(400).json({ message: `Too many parent_ids (max ${MAX_PARENTS})` })
+      }
+    }
+
     // Base query to get students with attendance and payment data
+    // We'll use LEFT JOINs and GROUP_CONCAT(DISTINCT ...) to avoid duplicate parent rows
     let studentQuery = `
       SELECT
-        s.id as student_id,
+        s.id AS student_id,
         s.first_name,
         s.last_name,
         s.lrn,
         s.grade_id,
         s.section_id,
-        g.name as grade_name,
-        sec.name as section_name,
-        -- Attendance data
-        att.status as attendance_status,
+        g.name AS grade_name,
+        sec.name AS section_name,
+        -- Attendance data (use att for the activity assignment)
+        att.status AS attendance_status,
         att.parent_present,
-        att.marked_at as attendance_marked_at,
-        -- Payment data
-        p.paid as payment_paid,
-        p.payment_date,
-        p.marked_at as payment_marked_at,
-        -- Parent information (concatenated)
-        GROUP_CONCAT(
-          CONCAT(par.first_name, ' ', par.last_name,
-          CASE WHEN sp.relation IS NOT NULL THEN CONCAT(' (', sp.relation, ')') ELSE '' END)
-          SEPARATOR ', '
-        ) as parents
+        att.marked_at AS attendance_marked_at,
+        -- Payment data (assumes payments table may have multiple records; we'll pick latest payment_date & max paid flag)
+        MAX(p.amount) AS payment_amount,
+        MAX(p.payment_date) AS payment_date,
+        MAX(p.paid) AS payment_paid,
+        MAX(p.marked_at) AS payment_marked_at,
+        -- Parent information (concatenated, distinct)
+        GROUP_CONCAT(DISTINCT CONCAT(par.last_name, ', ', par.first_name,
+          CASE WHEN sp.relation IS NOT NULL THEN CONCAT(' (', sp.relation, ')') ELSE '' END
+        ) SEPARATOR '; ') AS parents
       FROM students s
       INNER JOIN grades g ON s.grade_id = g.id
       INNER JOIN sections sec ON s.section_id = sec.id
@@ -62,7 +83,19 @@ export default async function handler(req, res) {
 
     const queryParams = [activity_id, section_id]
 
-    // Add search filter if provided
+    // Add parent filter (only include students that have any of the given parents)
+    if (parentIdsList.length > 0) {
+      const placeholders = parentIdsList.map(() => '?').join(',')
+
+      // Use EXISTS to avoid breaking the grouping
+      studentQuery += ` AND EXISTS (
+        SELECT 1 FROM student_parents sp2
+        WHERE sp2.student_id = s.id AND sp2.parent_id IN (${placeholders})
+      ) `
+      queryParams.push(...parentIdsList)
+    }
+
+    // Add search filter if provided (include LRN explicitly)
     if (search && search.trim() !== '') {
       studentQuery += ` AND (
         s.first_name LIKE ? OR
@@ -75,19 +108,18 @@ export default async function handler(req, res) {
       queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm)
     }
 
-    // Group by student and add pagination
+    // Group by student and add pagination / ordering
     studentQuery += `
       GROUP BY s.id, s.first_name, s.last_name, s.lrn, s.grade_id, s.section_id,
-               g.name, sec.name, att.status, att.parent_present, att.marked_at,
-               p.paid, p.payment_date, p.marked_at
+               g.name, sec.name, att.status, att.parent_present, att.marked_at
       ORDER BY s.last_name, s.first_name
       LIMIT ? OFFSET ?
     `
     queryParams.push(pageSize, offset)
 
-    // Count query for pagination
+    // Count query (similar filter but without LIMIT)
     let countQuery = `
-      SELECT COUNT(DISTINCT s.id) as total
+      SELECT COUNT(DISTINCT s.id) AS total
       FROM students s
       INNER JOIN activity_assignments aa ON aa.grade_id = s.grade_id AND aa.section_id = s.section_id
       WHERE s.is_deleted = 0
@@ -96,6 +128,15 @@ export default async function handler(req, res) {
     `
 
     const countParams = [activity_id, section_id]
+
+    if (parentIdsList.length > 0) {
+      const placeholders = parentIdsList.map(() => '?').join(',')
+      countQuery += ` AND EXISTS (
+        SELECT 1 FROM student_parents sp2
+        WHERE sp2.student_id = s.id AND sp2.parent_id IN (${placeholders})
+      ) `
+      countParams.push(...parentIdsList)
+    }
 
     if (search && search.trim() !== '') {
       countQuery += ` AND (
@@ -109,13 +150,12 @@ export default async function handler(req, res) {
       countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm)
     }
 
-    // Execute both queries
+    // Execute queries
     const [students] = await db.query(studentQuery, queryParams)
     const [countResult] = await db.query(countQuery, countParams)
+    const total = countResult?.[0]?.total ?? 0
 
-    const total = countResult[0]?.total || 0
-
-    // Format the response
+    // Format response
     const formattedStudents = students.map(student => ({
       student_id: student.student_id,
       first_name: student.first_name,
@@ -126,30 +166,28 @@ export default async function handler(req, res) {
       grade_name: student.grade_name,
       section_name: student.section_name,
       parents: student.parents || '',
-
-      // Attendance information
       attendance_status: student.attendance_status,
-      parent_present: student.parent_present === 1,
+      parent_present: Boolean(student.parent_present),
       attendance_marked_at: student.attendance_marked_at,
-
-      // Payment information
-      payment_paid: student.payment_paid, // 1 = paid, 0 = unpaid, null = not recorded
+      payment_amount: student.payment_amount ? Number(student.payment_amount) : null,
       payment_date: student.payment_date,
+      payment_paid: student.payment_paid === null ? null : Number(student.payment_paid),
       payment_marked_at: student.payment_marked_at
     }))
 
-    res.status(200).json({
+    return res.status(200).json({
       students: formattedStudents,
       pagination: {
         page: pageNum,
         page_size: pageSize,
-        total: parseInt(total),
+        total: Number(total),
         total_pages: Math.ceil(total / pageSize)
       },
-      total: parseInt(total) // For backward compatibility with the dashboard
+      total: Number(total)
     })
   } catch (err) {
-    console.error('GET /api/activity/students error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    console.error('GET /api/activities/students error:', err)
+
+    return res.status(500).json({ message: 'Internal server error' })
   }
 }

@@ -14,7 +14,6 @@ const defineRulesFor = (role, subject) => {
     cannot(['read'], 'teacher-dashboard')
     cannot(['read'], 'teacher-activity')
     cannot(['read'], 'students-page')
-    cannot(['read'], 'activities-page')
     cannot(['read'], 'attendance-page')
   } else if (role === 'teacher') {
     can(['read'], 'students-page')

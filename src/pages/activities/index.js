@@ -14,31 +14,55 @@ import {
   Tooltip,
   FormControlLabel,
   Checkbox,
-  Switch
+  Switch,
+  MenuItem
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
-import axios from 'axios'
 import { DataGrid } from '@mui/x-data-grid'
+import axios from 'axios'
 import { useSession } from 'next-auth/react'
 
 export default function ActivitiesPage() {
   const { data: session } = useSession()
+  const role = session?.user?.role
+  const isAdmin = role === 'admin'
+  const isTeacher = role === 'teacher'
+
   const [activities, setActivities] = useState([])
   const [loading, setLoading] = useState(false)
-
   const [me, setMe] = useState(null) // { user, teacher: { assigned_sections: [...] } }
+  const [grades, setGrades] = useState([])
 
   const [open, setOpen] = useState(false)
-  const emptyForm = { id: null, title: '', activity_date: '', payments_enabled: true }
+
+  const emptyForm = {
+    id: null,
+    title: '',
+    activity_date: '',
+    payments_enabled: true,
+    fee_type: 'fee',
+    fee_amount: '',
+
+    // admin-only
+    apply_all_grades: true,
+    selected_grade_ids: [],
+
+    // teacher-only
+    section_id: ''
+  }
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     fetchMyInfo()
-    fetchActivities()
+    fetchGrades()
   }, [])
+
+  useEffect(() => {
+    fetchActivities()
+  }, [role])
 
   const fetchMyInfo = async () => {
     try {
@@ -49,95 +73,132 @@ export default function ActivitiesPage() {
     }
   }
 
+  const fetchGrades = async () => {
+    try {
+      const res = await axios.get('/api/grades')
+      setGrades(res.data ?? [])
+    } catch (err) {
+      console.error('Failed to fetch grades', err)
+    }
+  }
+
   const fetchActivities = async () => {
     setLoading(true)
     try {
-      // Make sure your API returns payments_enabled
       const res = await axios.get('/api/activities')
       setActivities(res.data.activities ?? [])
     } catch (err) {
-      console.error(err)
+      console.error('Fetch activities error', err)
     } finally {
       setLoading(false)
     }
   }
 
   const openCreate = () => {
-    setForm(emptyForm)
+    const base = { ...emptyForm }
+
+    // If teacher with single assigned section, preselect it
+    if (isTeacher) {
+      const secs = me?.teacher?.assigned_sections ?? []
+      if (secs.length === 1) base.section_id = String(secs[0].id)
+    }
+    setForm(base)
     setOpen(true)
   }
 
   const openEdit = row => {
+    const canEdit =
+      row.can_edit ?? (session?.user?.role === 'admin' || Number(row.created_by) === Number(session?.user?.id))
+    if (!canEdit) {
+      alert('You can only edit activities you created.')
+
+      return
+    }
     setForm({
+      ...emptyForm,
       id: row.id,
       title: row.title,
       activity_date: row.activity_date,
-      payments_enabled: !!row.payments_enabled
+      payments_enabled: !!row.payments_enabled,
+      fee_type: row.fee_type || 'fee',
+      fee_amount: row.fee_amount ?? ''
+
+      // Editing assignment scope is not handled here to keep UI simple.
     })
     setOpen(true)
   }
 
   const saveActivity = async () => {
     if (!form.title || !form.activity_date) {
-      alert('Title and date required')
+      alert('Title and date are required')
 
       return
     }
-    if (!me?.teacher?.assigned_sections?.length) {
-      alert('No assigned grade/section found for this teacher.')
-
-      return
-    }
-
-    const assignedSection = me.teacher.assigned_sections[0] // always first assigned section
 
     const payload = {
       title: form.title,
       activity_date: form.activity_date,
-      payments_enabled: form.payments_enabled ? 1 : 0
+      payments_enabled: form.payments_enabled ? 1 : 0,
+      fee_type: form.fee_type,
+      fee_amount: form.fee_amount !== '' ? Number(form.fee_amount) : null
+    }
+
+    // Admin: choose scope (ALL grades or selected grades)
+    if (isAdmin) {
+      payload.assignment_mode = form.apply_all_grades ? 'ALL' : 'GRADES'
+      payload.grade_ids = form.apply_all_grades ? [] : form.selected_grade_ids.map(String)
+    }
+
+    // Teacher: must choose a section (one of their sections)
+    if (isTeacher) {
+      const secs = me?.teacher?.assigned_sections ?? []
+      if (secs.length === 0) {
+        alert('No assigned section found.')
+
+        return
+      }
+      if (!form.section_id) {
+        alert('Please choose a section.')
+
+        return
+      }
+      payload.assignment_mode = 'SECTION'
+      payload.section_id = String(form.section_id)
     }
 
     setSaving(true)
     try {
       if (form.id) {
-        // update only title/date/payments flag
         await axios.put(`/api/activities/${form.id}`, payload)
       } else {
-        // create activity
-        const createRes = await axios.post('/api/activities', payload)
-        const activityId = createRes.data?.id || createRes.data?.activity?.id
-
-        // assign to teacher via /api/activity_assignments
-        if (activityId) {
-          await axios.post('/api/activity_assignments', {
-            activity_id: activityId,
-            grade_id: assignedSection.grade_id,
-            section_id: assignedSection.id
-          })
-        }
+        await axios.post('/api/activities', payload)
       }
-
       setOpen(false)
       fetchActivities()
     } catch (err) {
-      console.error(err)
+      console.error('Save failed', err)
       alert(err?.response?.data?.message ?? 'Save failed')
     } finally {
       setSaving(false)
     }
   }
 
-  const handleTogglePaymentsInline = async (id, checked) => {
-    // optimistic update
+  const handleTogglePaymentsInline = async (row, checked) => {
+    // optimistic
+    const id = row.id
+
     setActivities(prev => prev.map(a => (a.id === id ? { ...a, payments_enabled: checked } : a)))
     try {
       await axios.put(`/api/activities/${id}`, { payments_enabled: checked ? 1 : 0 })
     } catch (err) {
-      console.error(err)
-
-      // revert on error
+      // revert
       setActivities(prev => prev.map(a => (a.id === id ? { ...a, payments_enabled: !checked } : a)))
-      alert('Failed to update payments flag')
+
+      const msg =
+        err?.response?.status === 403
+          ? 'You can only change payments for activities you created.'
+          : 'Failed to update payments flag'
+      alert(msg)
     }
   }
 
@@ -145,7 +206,7 @@ export default function ActivitiesPage() {
     if (!confirm(`Delete activity "${row.title}"?`)) return
     try {
       await axios.delete(`/api/activities/${row.id}`)
-      setActivities(prev => prev.filter(a => a.id !== row.id)) // update UI
+      setActivities(prev => prev.filter(a => a.id !== row.id))
     } catch (err) {
       console.error(err)
       alert(err?.response?.data?.message ?? 'Delete failed')
@@ -157,42 +218,76 @@ export default function ActivitiesPage() {
     { field: 'activity_date', headerName: 'Date', width: 130 },
     { field: 'created_by_name', headerName: 'Created by', width: 180 },
     {
+      field: 'scope',
+      headerName: 'Scope',
+      flex: 0.8,
+      valueGetter: p => p.row.scope_text || ''
+    },
+    {
+      field: 'fee',
+      headerName: 'Fee',
+      width: 120,
+      valueGetter: p => {
+        const t = p.row.fee_type
+        if (!t || t === 'none') return 'None'
+        if ((t === 'fee' || t === 'mixed') && p.row.fee_amount != null)
+          return `${t} • ${Number(p.row.fee_amount).toFixed(2)}`
+
+        return t
+      }
+    },
+    {
       field: 'payments_enabled',
       headerName: 'Payments',
-      width: 140,
-      renderCell: params => (
-        <FormControlLabel
-          control={
-            <Switch
-              checked={!!params.row.payments_enabled}
-              onChange={e => handleTogglePaymentsInline(params.row.id, e.target.checked)}
-              size='small'
-            />
-          }
-          label={params.row.payments_enabled ? 'Enabled' : 'Disabled'}
-        />
-      )
+      width: 150,
+      renderCell: params => {
+        const canToggle =
+          params.row.can_toggle ??
+          (session?.user?.role === 'admin' || Number(params.row.created_by) === Number(session?.user?.id))
+
+        return (
+          <FormControlLabel
+            control={
+              <Switch
+                checked={!!params.row.payments_enabled}
+                onChange={e => handleTogglePaymentsInline(params.row, e.target.checked)}
+                disabled={!canToggle}
+                size='small'
+              />
+            }
+            label={params.row.payments_enabled ? 'Enabled' : 'Disabled'}
+          />
+        )
+      }
     },
     {
       field: 'actions',
       headerName: 'Actions',
       width: 160,
-      renderCell: params => (
-        <Stack direction='row' spacing={1}>
-          <Tooltip title='Edit'>
-            <IconButton size='small' onClick={() => openEdit(params.row)}>
-              <EditIcon fontSize='small' />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title='Delete'>
-            <IconButton size='small' color='error' onClick={() => handleDelete(params.row)}>
-              <DeleteIcon fontSize='small' />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-      )
+      renderCell: params => {
+        const canEdit =
+          params.row.can_edit ??
+          (session?.user?.role === 'admin' || Number(params.row.created_by) === Number(session?.user?.id))
+
+        return (
+          <Stack direction='row' spacing={1}>
+            <Tooltip title='Edit'>
+              <IconButton size='small' onClick={() => openEdit(params.row)} disabled={!canEdit}>
+                <EditIcon fontSize='small' />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title='Delete'>
+              <IconButton size='small' color='error' onClick={() => handleDelete(params.row)} disabled={!canEdit}>
+                <DeleteIcon fontSize='small' />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+        )
+      }
     }
   ]
+
+  const teacherSections = me?.teacher?.assigned_sections ?? []
 
   return (
     <Box p={3}>
@@ -203,11 +298,11 @@ export default function ActivitiesPage() {
         </Button>
       </Box>
 
-      <div style={{ height: 500, width: '100%' }}>
+      <div style={{ height: 540, width: '100%' }}>
         <DataGrid rows={activities} columns={columns} getRowId={r => r.id} loading={loading} disableSelectionOnClick />
       </div>
 
-      {/* Create/Edit Activity modal */}
+      {/* Create/Edit dialog */}
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth='sm'>
         <DialogTitle>{form.id ? 'Edit Activity' : 'Create Activity'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -226,6 +321,32 @@ export default function ActivitiesPage() {
             fullWidth
           />
 
+          {/* Fee settings (schema-aware) */}
+          <TextField
+            select
+            label='Fee type'
+            value={form.fee_type}
+            onChange={e => setForm({ ...form, fee_type: e.target.value })}
+            fullWidth
+          >
+            <MenuItem value='fee'>Fee</MenuItem>
+            <MenuItem value='donation'>Donation</MenuItem>
+            <MenuItem value='service'>Service</MenuItem>
+            <MenuItem value='mixed'>Mixed</MenuItem>
+            <MenuItem value='none'>None</MenuItem>
+          </TextField>
+
+          {(form.fee_type === 'fee' || form.fee_type === 'mixed') && (
+            <TextField
+              type='number'
+              inputProps={{ step: '0.01', min: 0 }}
+              label='Fee amount'
+              value={form.fee_amount}
+              onChange={e => setForm({ ...form, fee_amount: e.target.value })}
+              fullWidth
+            />
+          )}
+
           <FormControlLabel
             control={
               <Checkbox
@@ -233,8 +354,62 @@ export default function ActivitiesPage() {
                 onChange={e => setForm({ ...form, payments_enabled: e.target.checked })}
               />
             }
-            label='Require payment for this activity'
+            label='Payments enabled'
           />
+
+          {/* Admin scope controls */}
+          {isAdmin && (
+            <>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={!!form.apply_all_grades}
+                    onChange={e =>
+                      setForm({
+                        ...form,
+                        apply_all_grades: e.target.checked,
+                        selected_grade_ids: e.target.checked ? [] : form.selected_grade_ids
+                      })
+                    }
+                  />
+                }
+                label='Apply to ALL grades'
+              />
+              {!form.apply_all_grades && (
+                <TextField
+                  select
+                  label='Select grades'
+                  value={form.selected_grade_ids}
+                  onChange={e => setForm({ ...form, selected_grade_ids: e.target.value })}
+                  SelectProps={{ multiple: true }}
+                  fullWidth
+                >
+                  {grades.map(g => (
+                    <MenuItem key={g.id} value={String(g.id)}>
+                      {g.name}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+            </>
+          )}
+
+          {/* Teacher scope control */}
+          {isTeacher && (
+            <TextField
+              select
+              label='Your section'
+              value={form.section_id}
+              onChange={e => setForm({ ...form, section_id: e.target.value })}
+              fullWidth
+            >
+              {teacherSections.map(s => (
+                <MenuItem key={s.id} value={String(s.id)}>
+                  {s.grade_name} - {s.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>

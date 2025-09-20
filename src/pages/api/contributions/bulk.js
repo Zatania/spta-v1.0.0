@@ -88,7 +88,7 @@ export default async function handler(req, res) {
       }
       const parentId = pRows[0].parent_id
 
-      values.push('(?, ?, ?, ?, ?, ?, ?, NULL, NULL, NOW())')
+      values.push('(?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NOW())')
       params.push(
         activity_assignment_id,
         studentId,

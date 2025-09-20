@@ -82,7 +82,7 @@ export default async function handler(req, res) {
         LEFT JOIN teacher_sections ts ON ts.section_id = s.id
         LEFT JOIN users u ON u.id = ts.user_id AND u.is_deleted = 0
         ${whereSql}
-        ORDER BY grade_sort_id, s.name
+        ORDER BY grade_sort_id, s.name ASC
         LIMIT ? OFFSET ?
       `
       const finalParams = [...params, limit, offset]

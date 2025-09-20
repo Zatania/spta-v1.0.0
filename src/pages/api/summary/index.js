@@ -1,7 +1,8 @@
 // pages/api/summary.js
 import { getServerSession } from 'next-auth/next'
-import { authOptions } from '../auth/[...nextauth]' // adjust path if your NextAuth file is elsewhere
-import db from '../db' // adjust path to your DB helper
+import { authOptions } from '../auth/[...nextauth]'
+import db from '../db'
+import { getCurrentSchoolYearId } from '../lib/schoolYear' // NOTE: path is from /pages/api/summary.js
 
 const isValidDate = d => {
   if (!d) return false
@@ -35,10 +36,10 @@ export default async function handler(req, res) {
     to_date = null
   } = req.query
 
-  // build date filters both with and without alias `a.`
+  // Date filters
   const dateParams = []
-  const dateFiltersA = [] // uses alias a.activity_date (for queries that alias activities as `a`)
-  const dateFiltersNoAlias = [] // uses activity_date (for queries that reference activities table without alias)
+  const dateFiltersA = [] // uses alias a.activity_date
+  const dateFiltersNoAlias = [] // uses activity_date
 
   if (isValidDate(from_date)) {
     dateFiltersA.push('a.activity_date >= ?')
@@ -55,17 +56,30 @@ export default async function handler(req, res) {
   const dateWhereNoAlias = dateFiltersNoAlias.length ? `AND ${dateFiltersNoAlias.join(' AND ')}` : ''
 
   try {
+    const currentSyId = await getCurrentSchoolYearId()
+
     // ---------- OVERVIEW ----------
     if (view === 'overview') {
-      const [studentsRows] = await db.query(`SELECT COUNT(*) AS total_students FROM students WHERE is_deleted = 0`)
-
-      // use dateWhereNoAlias because we reference activities without alias here
-      const [[activitiesRow]] = await db.query(
-        `SELECT COUNT(*) AS total_activities FROM activities WHERE is_deleted = 0 ${dateWhereNoAlias}`,
-        dateParams
+      // total students = active enrollments in current SY
+      const [[studentsRow]] = await db.query(
+        `SELECT COUNT(DISTINCT en.student_id) AS total_students
+         FROM student_enrollments en
+         JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
+         WHERE en.school_year_id = ? AND en.status = 'active'`,
+        [currentSyId]
       )
 
-      // attendance totals (present/absent) across activities in date range
+      // activities count (current SY + optional date range)
+      const [[activitiesRow]] = await db.query(
+        `SELECT COUNT(*) AS total_activities
+         FROM activities
+         WHERE is_deleted = 0
+           AND school_year_id = ?
+           ${dateWhereNoAlias}`,
+        [currentSyId, ...dateParams]
+      )
+
+      // attendance totals limited to current SY activities
       const [attendanceRows] = await db.query(
         `
         SELECT
@@ -78,13 +92,13 @@ export default async function handler(req, res) {
         JOIN activities a ON a.id = aa.activity_id
         JOIN students s ON s.id = att.student_id AND s.is_deleted = 0
         WHERE a.is_deleted = 0
+          AND a.school_year_id = ?
           ${dateWhereA};
-
         `,
-        dateParams
+        [currentSyId, ...dateParams]
       )
 
-      // payments totals
+      // payments totals limited to current SY activities
       const [paymentsRows] = await db.query(
         `
         SELECT
@@ -95,25 +109,31 @@ export default async function handler(req, res) {
         JOIN activities a ON a.id = aa.activity_id
         JOIN students s ON s.id = p.student_id AND s.is_deleted = 0
         WHERE a.is_deleted = 0
+          AND a.school_year_id = ?
           ${dateWhereA};
-
         `,
-        dateParams
+        [currentSyId, ...dateParams]
       )
 
       return res.status(200).json({
-        total_students: studentsRows[0].total_students ?? 0,
-        total_activities: activitiesRow.total_activities ?? 0,
-        attendance: attendanceRows[0] ?? { total_present: 0, total_absent: 0, parent_present_count: 0 },
+        total_students: Number(studentsRow?.total_students || 0),
+        total_activities: Number(activitiesRow?.total_activities || 0),
+        attendance: attendanceRows[0] ?? {
+          total_present: 0,
+          total_absent: 0,
+          parent_present_count: 0,
+          parent_absent_count: 0
+        },
         payments: paymentsRows[0] ?? { total_paid: 0, total_unpaid: 0 }
       })
     }
 
     // ---------- BY GRADE ----------
     if (view === 'byGrade') {
-      const gradeFilter = grade_id ? 'WHERE g.id = ?' : ''
-      const gradeParams = grade_id ? [grade_id] : []
+      const filter = grade_id ? 'WHERE g.id = ?' : ''
+      const params = grade_id ? [grade_id, currentSyId] : [currentSyId]
 
+      // Count students per section via current SY enrollments
       const [rows] = await db.query(
         `
         SELECT
@@ -121,28 +141,28 @@ export default async function handler(req, res) {
           g.name AS grade_name,
           s.id AS section_id,
           s.name AS section_name,
-          COUNT(st.id) AS total_students
+          COUNT(DISTINCT en.student_id) AS total_students
         FROM grades g
-        LEFT JOIN sections s ON s.grade_id = g.id
-        LEFT JOIN students st ON st.section_id = s.id AND st.is_deleted = 0
-        ${gradeFilter}
-        GROUP BY g.id, s.id, s.name
+        LEFT JOIN sections s ON s.grade_id = g.id AND s.is_deleted = 0
+        LEFT JOIN student_enrollments en
+          ON en.section_id = s.id
+         AND en.school_year_id = ?
+         AND en.status = 'active'
+        ${filter}
+        GROUP BY g.id, g.name, s.id, s.name
         ORDER BY g.id, s.name
         `,
-        gradeParams
+        params
       )
 
       const gradeMap = {}
       for (const r of rows) {
         const gid = r.grade_id
-        if (!gradeMap[gid]) {
-          gradeMap[gid] = { grade_id: gid, grade_name: r.grade_name, sections: [] }
-        }
-
+        if (!gradeMap[gid]) gradeMap[gid] = { grade_id: gid, grade_name: r.grade_name, sections: [] }
         gradeMap[gid].sections.push({
           section_id: r.section_id,
           section_name: r.section_name,
-          total_students: Number(r.total_students)
+          total_students: Number(r.total_students || 0)
         })
       }
 
@@ -155,19 +175,22 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'section_id is required for view=bySection' })
       }
 
+      // activities for that section in current SY
       const [activities] = await db.query(
         `
-        SELECT
+        SELECT DISTINCT
           a.id AS activity_id,
           a.title,
           a.activity_date
         FROM activities a
         JOIN activity_assignments aa ON aa.activity_id = a.id
-        WHERE aa.section_id = ? AND a.is_deleted = 0 ${dateWhereA}
-        GROUP BY a.id
+        WHERE aa.section_id = ?
+          AND a.is_deleted = 0
+          AND a.school_year_id = ?
+          ${dateWhereA}
         ORDER BY a.activity_date DESC
         `,
-        [section_id, ...dateParams]
+        [section_id, currentSyId, ...dateParams]
       )
 
       const activitySummaries = []
@@ -202,19 +225,30 @@ export default async function handler(req, res) {
           activity_id: act.activity_id,
           title: act.title,
           activity_date: act.activity_date,
-          attendance: attRows[0] ?? { present_count: 0, absent_count: 0, parent_present_count: 0 },
+          attendance: attRows[0] ?? {
+            present_count: 0,
+            absent_count: 0,
+            parent_present_count: 0,
+            parent_absent_count: 0
+          },
           payments: payRows[0] ?? { paid_count: 0, unpaid_count: 0 }
         })
       }
 
+      // students in section (current SY, active)
       const [[studentRow]] = await db.query(
-        `SELECT COUNT(*) AS total_students FROM students WHERE section_id = ? AND is_deleted = 0`,
-        [section_id]
+        `
+        SELECT COUNT(DISTINCT en.student_id) AS total_students
+        FROM student_enrollments en
+        JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
+        WHERE en.section_id = ? AND en.school_year_id = ? AND en.status = 'active'
+        `,
+        [section_id, currentSyId]
       )
 
       return res.status(200).json({
         section_id,
-        total_students: studentRow.total_students ?? 0,
+        total_students: Number(studentRow?.total_students || 0),
         activities: activitySummaries
       })
     }
@@ -224,6 +258,13 @@ export default async function handler(req, res) {
       if (!activity_id) {
         return res.status(400).json({ message: 'activity_id is required for view=byActivity' })
       }
+
+      // optional: ensure activity belongs to current SY
+      const [[actCheck]] = await db.query(
+        `SELECT id FROM activities WHERE id = ? AND is_deleted = 0 AND school_year_id = ? LIMIT 1`,
+        [activity_id, currentSyId]
+      )
+      if (!actCheck) return res.status(404).json({ message: 'Activity not found for current school year' })
 
       const [attGroups] = await db.query(
         `
@@ -275,7 +316,8 @@ export default async function handler(req, res) {
     // ---------- PAYMENTS BY GRADE ----------
     if (view === 'paymentsByGrade') {
       const gradeFilter = grade_id ? 'AND aa.grade_id = ?' : ''
-      const params = grade_id ? [grade_id, ...dateParams] : [...dateParams]
+
+      const params = grade_id ? [currentSyId, ...dateParams, grade_id] : [currentSyId, ...dateParams]
 
       const [rows] = await db.query(
         `
@@ -290,11 +332,11 @@ export default async function handler(req, res) {
         JOIN grades g ON g.id = aa.grade_id
         JOIN students s ON s.id = p.student_id AND s.is_deleted = 0
         WHERE a.is_deleted = 0
+          AND a.school_year_id = ?
           ${dateWhereA}
           ${gradeFilter}
         GROUP BY aa.grade_id, g.name
         ORDER BY aa.grade_id;
-
         `,
         params
       )
@@ -308,7 +350,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'grade_id is required for view=paymentsBySection' })
       }
 
-      const params = [grade_id, ...dateParams]
+      const params = [currentSyId, ...dateParams, grade_id]
 
       const [rows] = await db.query(
         `
@@ -323,11 +365,11 @@ export default async function handler(req, res) {
         JOIN sections s ON s.id = aa.section_id AND s.is_deleted = 0
         JOIN students st ON st.id = p.student_id AND st.is_deleted = 0
         WHERE a.is_deleted = 0
-          AND aa.grade_id = ?
+          AND a.school_year_id = ?
           ${dateWhereA}
+          AND aa.grade_id = ?
         GROUP BY aa.section_id, s.name
         ORDER BY s.name;
-
         `,
         params
       )
@@ -352,12 +394,12 @@ export default async function handler(req, res) {
         JOIN grades g ON g.id = aa.grade_id
         JOIN students s ON s.id = att.student_id AND s.is_deleted = 0
         WHERE a.is_deleted = 0
+          AND a.school_year_id = ?
           ${dateWhereA}
         GROUP BY aa.grade_id, g.name
         ORDER BY aa.grade_id;
-
         `,
-        dateParams
+        [currentSyId, ...dateParams]
       )
 
       return res.status(200).json({ activities_by_grade: rows ?? [] })
@@ -384,13 +426,13 @@ export default async function handler(req, res) {
         JOIN sections s ON s.id = aa.section_id AND s.is_deleted = 0
         JOIN students st ON st.id = att.student_id AND st.is_deleted = 0
         WHERE a.is_deleted = 0
-          AND aa.grade_id = ?
+          AND a.school_year_id = ?
           ${dateWhereA}
+          AND aa.grade_id = ?
         GROUP BY aa.section_id, s.name
         ORDER BY s.name;
-
         `,
-        [grade_id, ...dateParams]
+        [currentSyId, ...dateParams, grade_id]
       )
 
       return res.status(200).json({ activities_by_section: rows ?? [] })
@@ -410,10 +452,13 @@ export default async function handler(req, res) {
             a.activity_date
           FROM activities a
           JOIN activity_assignments aa ON aa.activity_id = a.id
-          WHERE aa.section_id = ? AND aa.is_deleted = 0 ${dateWhereA}
+          WHERE aa.section_id = ?
+            AND a.is_deleted = 0
+            AND a.school_year_id = ?
+            ${dateWhereA}
           ORDER BY a.activity_date DESC
           `,
-        [section_id, ...dateParams]
+        [section_id, currentSyId, ...dateParams]
       )
 
       const activitySummaries = []

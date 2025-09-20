@@ -25,6 +25,8 @@ import {
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
+import UpgradeIcon from '@mui/icons-material/Upgrade'
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 import DeleteIcon from '@mui/icons-material/Delete'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
@@ -42,6 +44,11 @@ export default function StudentsPage() {
   const [parents, setParents] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
+
+  const [schoolYears, setSchoolYears] = useState([])
+  const [promoteOpen, setPromoteOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [activeRow, setActiveRow] = useState(null)
 
   // filters & paging
   const [search, setSearch] = useState('')
@@ -83,6 +90,45 @@ export default function StudentsPage() {
     relation: ''
   })
   const [savingParent, setSavingParent] = useState(false)
+
+  const [promoteForm, setPromoteForm] = useState({
+    school_year_id: '', // default to next SY after load
+    grade_id: '',
+    section_id: ''
+  })
+
+  const [transferForm, setTransferForm] = useState({
+    grade_id: '',
+    section_id: ''
+  })
+
+  useEffect(() => {
+    // load school years once
+    axios
+      .get('/api/school-years')
+      .then(r => setSchoolYears(r.data ?? []))
+      .catch(() => {})
+  }, [])
+
+  const openPromote = row => {
+    setActiveRow(row)
+
+    // find current and next SY
+    const current = schoolYears.find(sy => sy.is_current === 1)
+    const next = schoolYears.find(sy => new Date(sy.start_date) > new Date(current?.start_date || 0))
+    setPromoteForm({
+      school_year_id: String(next?.id || ''), // allow manual change if needed
+      grade_id: '',
+      section_id: ''
+    })
+    setPromoteOpen(true)
+  }
+
+  const openTransfer = row => {
+    setActiveRow(row)
+    setTransferForm({ grade_id: '', section_id: '' })
+    setTransferOpen(true)
+  }
 
   // load user info and static lists
   useEffect(() => {
@@ -160,9 +206,10 @@ export default function StudentsPage() {
   const fetchParents = async () => {
     try {
       const res = await axios.get('/api/parents')
-      setParents(res.data ?? [])
+      setParents(res.data?.parents ?? res.data ?? [])
     } catch (err) {
       console.error('Failed to load parents', err)
+      setParents([])
     }
   }
 
@@ -490,7 +537,8 @@ export default function StudentsPage() {
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 80 },
-    {
+
+    /* {
       field: 'picture',
       headerName: 'Photo',
       width: 80,
@@ -504,9 +552,9 @@ export default function StudentsPage() {
           {params.row.last_name?.[0]}
         </Avatar>
       )
-    },
+    }, */
     { field: 'lrn', headerName: 'LRN', width: 140 },
-    { field: 'last_name', headerName: 'Last name', flex: 1 },
+    { field: 'last_name', headerName: 'Last name', width: 140 },
     { field: 'first_name', headerName: 'First name', flex: 1 },
     { field: 'grade_name', headerName: 'Grade', width: 120 },
     { field: 'section_name', headerName: 'Section', width: 160 },
@@ -514,7 +562,7 @@ export default function StudentsPage() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
+      width: 150,
       renderCell: params => (
         <Stack direction='row' spacing={1}>
           <Tooltip title='Edit'>
@@ -525,6 +573,16 @@ export default function StudentsPage() {
           <Tooltip title='Delete'>
             <IconButton size='small' color='error' onClick={() => remove(params.row.id)}>
               <DeleteIcon fontSize='small' />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title='Promote to next year'>
+            <IconButton size='small' onClick={() => openPromote(params.row)}>
+              <UpgradeIcon fontSize='small' />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title='Transfer (same year)'>
+            <IconButton size='small' onClick={() => openTransfer(params.row)}>
+              <SwapHorizIcon fontSize='small' />
             </IconButton>
           </Tooltip>
         </Stack>
@@ -821,7 +879,7 @@ export default function StudentsPage() {
               fullWidth
             >
               <MenuItem value=''>-- No Parent Selected --</MenuItem>
-              {parents.map(p => (
+              {(Array.isArray(parents) ? parents : []).map(p => (
                 <MenuItem key={p.id} value={String(p.id)}>
                   {p.first_name} {p.last_name} {p.contact_info ? `(${p.contact_info})` : ''}
                 </MenuItem>
@@ -886,6 +944,147 @@ export default function StudentsPage() {
           <Button onClick={() => setParentDialogOpen(false)}>Cancel</Button>
           <Button variant='contained' onClick={saveParent} disabled={savingParent}>
             {savingParent ? 'Saving...' : 'Save Parent'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={promoteOpen} onClose={() => setPromoteOpen(false)} maxWidth='sm' fullWidth>
+        <DialogTitle>Promote {activeRow ? `${activeRow.last_name}, ${activeRow.first_name}` : ''}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          <TextField
+            select
+            label='Target School Year'
+            value={promoteForm.school_year_id}
+            onChange={e => setPromoteForm(f => ({ ...f, school_year_id: e.target.value }))}
+            fullWidth
+          >
+            {schoolYears
+              .filter(
+                sy =>
+                  !schoolYears.find(s => s.is_current === 1) ||
+                  new Date(sy.start_date) >= new Date(schoolYears.find(s => s.is_current === 1).start_date)
+              )
+              .map(sy => (
+                <MenuItem key={sy.id} value={String(sy.id)}>
+                  {sy.name}
+                  {sy.is_current ? ' (current)' : ''}
+                </MenuItem>
+              ))}
+          </TextField>
+
+          <TextField
+            select
+            label='Target Grade'
+            value={promoteForm.grade_id}
+            onChange={e => setPromoteForm(f => ({ ...f, grade_id: e.target.value }))}
+            fullWidth
+          >
+            <MenuItem value=''>-- Select Grade --</MenuItem>
+            {grades.map(g => (
+              <MenuItem key={g.id} value={String(g.id)}>
+                {g.name}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            select
+            label='Target Section'
+            value={promoteForm.section_id}
+            onChange={e => setPromoteForm(f => ({ ...f, section_id: e.target.value }))}
+            fullWidth
+            disabled={!promoteForm.grade_id}
+          >
+            <MenuItem value=''>-- Select Section --</MenuItem>
+            {sectionsAll
+              .filter(s => !promoteForm.grade_id || String(s.grade_id) === String(promoteForm.grade_id))
+              .map(s => (
+                <MenuItem key={s.id} value={String(s.id)}>
+                  {s.name}
+                </MenuItem>
+              ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPromoteOpen(false)}>Cancel</Button>
+          <Button
+            variant='contained'
+            onClick={async () => {
+              if (!activeRow) return
+              try {
+                await axios.post(`/api/students/${activeRow.id}/promote`, {
+                  to_school_year_id: promoteForm.school_year_id || undefined,
+                  to_grade_id: promoteForm.grade_id,
+                  to_section_id: promoteForm.section_id,
+                  mark_previous_as: 'promoted'
+                })
+                setPromoteOpen(false)
+                fetchStudents({ page: 0 }) // refresh
+              } catch (e) {
+                alert(e?.response?.data?.message ?? 'Promote failed')
+              }
+            }}
+            disabled={!promoteForm.grade_id || !promoteForm.section_id}
+          >
+            Promote
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={transferOpen} onClose={() => setTransferOpen(false)} maxWidth='sm' fullWidth>
+        <DialogTitle>Transfer {activeRow ? `${activeRow.last_name}, ${activeRow.first_name}` : ''}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          <TextField
+            select
+            label='New Grade'
+            value={transferForm.grade_id}
+            onChange={e => setTransferForm(f => ({ ...f, grade_id: e.target.value }))}
+            fullWidth
+          >
+            <MenuItem value=''>-- Select Grade --</MenuItem>
+            {grades.map(g => (
+              <MenuItem key={g.id} value={String(g.id)}>
+                {g.name}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            select
+            label='New Section'
+            value={transferForm.section_id}
+            onChange={e => setTransferForm(f => ({ ...f, section_id: e.target.value }))}
+            fullWidth
+            disabled={!transferForm.grade_id}
+          >
+            <MenuItem value=''>-- Select Section --</MenuItem>
+            {sectionsAll
+              .filter(s => !transferForm.grade_id || String(s.grade_id) === String(transferForm.grade_id))
+              .map(s => (
+                <MenuItem key={s.id} value={String(s.id)}>
+                  {s.name}
+                </MenuItem>
+              ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTransferOpen(false)}>Cancel</Button>
+          <Button
+            variant='contained'
+            onClick={async () => {
+              if (!activeRow) return
+              try {
+                await axios.put(`/api/students/${activeRow.id}/transfer`, {
+                  to_grade_id: transferForm.grade_id,
+                  to_section_id: transferForm.section_id
+                })
+                setTransferOpen(false)
+                fetchStudents({ page: 0 })
+              } catch (e) {
+                alert(e?.response?.data?.message ?? 'Transfer failed')
+              }
+            }}
+            disabled={!transferForm.grade_id || !transferForm.section_id}
+          >
+            Transfer
           </Button>
         </DialogActions>
       </Dialog>

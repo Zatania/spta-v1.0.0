@@ -1,6 +1,6 @@
 // pages/api/parents/pupils.js  (alternate using student_enrollments + optional school_year)
 import { getServerSession } from 'next-auth/next'
-import { authOptions } from '../auth/[...nextauth]'
+import { authOptions } from '../../auth/[...nextauth]'
 import db from '../../db'
 
 export default async function handler(req, res) {

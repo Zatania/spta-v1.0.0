@@ -5,34 +5,31 @@ import db from '../db'
 import formidable from 'formidable'
 import fs from 'fs'
 import path from 'path'
+import { getCurrentSchoolYearId } from '../lib/schoolYear'
 
-// Disable body parser for file uploads
-export const config = {
-  api: {
-    bodyParser: false
-  }
-}
+export const config = { api: { bodyParser: false } }
 
 export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
+    // ---------- LIST ----------
     if (req.method === 'GET') {
-      // Filters: search, lrn, grade_id, section_id, page, page_size
       const { search = '', lrn = '', grade_id = '', section_id = '', page = 1, page_size = 25 } = req.query
       const limit = Math.max(1, Math.min(1000, Number(page_size) || 25))
       const offset = (Math.max(1, Number(page) || 1) - 1) * limit
+      const currentSyId = await getCurrentSchoolYearId()
 
-      const where = ['st.is_deleted = 0']
-      const params = []
+      const where = ['st.is_deleted = 0', 'en.school_year_id = ?']
+      const params = [currentSyId]
 
       if (grade_id) {
-        where.push('st.grade_id = ?')
+        where.push('en.grade_id = ?')
         params.push(grade_id)
       }
       if (section_id) {
-        where.push('st.section_id = ?')
+        where.push('en.section_id = ?')
         params.push(section_id)
       }
       if (lrn) {
@@ -46,86 +43,84 @@ export default async function handler(req, res) {
         params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
       }
 
-      // If teacher, restrict to their sections
+      // Teacher restriction: only their sections for the *current* SY (or rows with NULL school_year_id in teacher_sections as fallback)
       if (session.user.role === 'teacher') {
-        where.push('st.section_id IN (SELECT section_id FROM teacher_sections WHERE user_id = ?)')
-        params.push(session.user.id)
+        where.push(
+          `en.section_id IN (
+             SELECT section_id
+             FROM teacher_sections
+             WHERE user_id = ?
+               AND (school_year_id = ? OR school_year_id IS NULL)
+           )`
+        )
+        params.push(session.user.id, currentSyId)
       }
 
-      const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
+      const whereSql = 'WHERE ' + where.join(' AND ')
 
-      const countSql = `SELECT COUNT(*) AS total FROM students st ${whereSql}`
+      const countSql = `
+        SELECT COUNT(*) AS total
+        FROM students st
+        JOIN student_enrollments en ON en.student_id = st.id
+        ${whereSql}
+      `
       const [countRows] = await db.query(countSql, params)
       const total = countRows[0]?.total ?? 0
 
       const sql = `
         SELECT
-          st.id, st.first_name, st.last_name, st.lrn, st.grade_id, st.section_id,
+          st.id, st.first_name, st.last_name, st.lrn, st.picture_url,
+          en.grade_id, en.section_id,
           g.name AS grade_name,
           s.name AS section_name,
           u.full_name AS teacher_name
         FROM students st
-        LEFT JOIN grades g ON g.id = st.grade_id
-        LEFT JOIN sections s ON s.id = st.section_id
-        LEFT JOIN teacher_sections ts ON ts.section_id = st.section_id
+        JOIN student_enrollments en ON en.student_id = st.id
+        LEFT JOIN grades g ON g.id = en.grade_id
+        LEFT JOIN sections s ON s.id = en.section_id
+        LEFT JOIN teacher_sections ts
+          ON ts.section_id = en.section_id
+         AND (ts.school_year_id = ? OR ts.school_year_id IS NULL)
         LEFT JOIN users u ON u.id = ts.user_id
         ${whereSql}
         ORDER BY st.last_name, st.first_name
         LIMIT ? OFFSET ?
       `
-      const finalParams = [...params, limit, offset]
-      const [rows] = await db.query(sql, finalParams)
+      const [rows] = await db.query(sql, [currentSyId, ...params, limit, offset])
 
       return res.status(200).json({ total, page: Number(page), page_size: limit, students: rows })
     }
 
+    // ---------- CREATE ----------
     if (req.method === 'POST') {
-      // Parse form data with file upload
+      const currentSyId = await getCurrentSchoolYearId()
+
       const form = formidable({
         uploadDir: path.join(process.cwd(), 'public/uploads/students'),
         keepExtensions: true,
-        maxFileSize: 5 * 1024 * 1024, // 5MB
+        maxFileSize: 5 * 1024 * 1024,
         multiples: false
       })
 
-      // Ensure upload directory exists
       const uploadDir = path.join(process.cwd(), 'public/uploads/students')
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true })
-      }
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
 
       const [fields, files] = await new Promise((resolve, reject) => {
-        form.parse(req, (err, fields, files) => {
-          if (err) reject(err)
-          else resolve([fields, files])
-        })
+        form.parse(req, (err, f, fl) => (err ? reject(err) : resolve([f, fl])))
       })
 
-      const first_name = Array.isArray(fields.first_name) ? fields.first_name[0] : fields.first_name
-      const last_name = Array.isArray(fields.last_name) ? fields.last_name[0] : fields.last_name
-      const lrn = Array.isArray(fields.lrn) ? fields.lrn[0] : fields.lrn
-      const grade_id = Array.isArray(fields.grade_id) ? fields.grade_id[0] : fields.grade_id
-      const section_id = Array.isArray(fields.section_id) ? fields.section_id[0] : fields.section_id
-      const teacher_id = Array.isArray(fields.teacher_id) ? fields.teacher_id[0] : fields.teacher_id
-      const parent_id = Array.isArray(fields.parent_id) ? fields.parent_id[0] : fields.parent_id
+      const get = v => (Array.isArray(v) ? v[0] : v)
+      const first_name = get(fields.first_name)
+      const last_name = get(fields.last_name)
+      const lrn = get(fields.lrn)
+      const grade_id = get(fields.grade_id)
+      const section_id = get(fields.section_id)
+      const parent_id = get(fields.parent_id)
 
-      if (!first_name || !last_name || !lrn || !grade_id || !section_id) {
+      if (!first_name || !last_name || !lrn || !grade_id || !section_id)
         return res.status(400).json({ message: 'Missing required fields' })
-      }
 
-      /* // Require picture for new students
-      const pictureFile = Array.isArray(files.picture) ? files.picture[0] : files.picture
-
-      if (!pictureFile) {
-        return res.status(400).json({ message: 'Student picture is required' })
-      }
-
-      // Validate image file
-      if (!pictureFile.mimetype?.startsWith('image/')) {
-        return res.status(400).json({ message: 'Please upload a valid image file' })
-      } */
-
-      // verify section exists & grade match
+      // validate section-grade
       const [secRows] = await db.query('SELECT id, grade_id FROM sections WHERE id = ? AND is_deleted = 0 LIMIT 1', [
         section_id
       ])
@@ -133,70 +128,65 @@ export default async function handler(req, res) {
       if (String(secRows[0].grade_id) !== String(grade_id))
         return res.status(400).json({ message: 'Section does not belong to grade' })
 
-      // teachers can only create students for their assigned sections
+      // teacher restriction
       if (session.user.role === 'teacher') {
-        const [ok] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-          session.user.id,
-          section_id
-        ])
+        const [ok] = await db.query(
+          `SELECT 1 FROM teacher_sections
+           WHERE user_id = ? AND section_id = ? AND (school_year_id = ? OR school_year_id IS NULL)
+           LIMIT 1`,
+          [session.user.id, section_id, currentSyId]
+        )
         if (!ok.length) return res.status(403).json({ message: 'Forbidden: cannot add students to this section' })
       }
 
-      // LRN unique check
-      const [lrnCheck] = await db.query('SELECT id FROM students WHERE lrn = ? AND is_deleted = 0 LIMIT 1', [lrn])
-      if (lrnCheck.length) return res.status(409).json({ message: 'LRN already exists' })
+      // unique LRN
+      const [dup] = await db.query('SELECT id FROM students WHERE lrn = ? AND is_deleted = 0 LIMIT 1', [lrn])
+      if (dup.length) return res.status(409).json({ message: 'LRN already exists' })
 
       let conn
       try {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
-        /* // Generate unique filename
-        const fileExt = path.extname(pictureFile.originalFilename || pictureFile.newFilename)
-        const uniqueFilename = `${Date.now()}-${Math.random().toString(36).substring(2)}${fileExt}`
-        const finalPath = path.join(uploadDir, uniqueFilename)
-
-        // Move file to final location
-        fs.renameSync(pictureFile.filepath, finalPath)
-
-        const picture_url = `/uploads/students/${uniqueFilename}` */
-
         const [ins] = await conn.query(
-          'INSERT INTO students (first_name, last_name, lrn, grade_id, section_id, is_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())',
-          [first_name, last_name, lrn, grade_id, section_id]
+          'INSERT INTO students (first_name, last_name, lrn, is_deleted, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
+          [first_name, last_name, lrn]
         )
         const studentId = ins.insertId
 
-        // Handle parent assignment if provided
+        // Enrollment (current SY)
+        await conn.query(
+          `INSERT INTO student_enrollments (student_id, school_year_id, grade_id, section_id, status, enrolled_at)
+           VALUES (?, ?, ?, ?, 'active', NOW())
+           ON DUPLICATE KEY UPDATE grade_id = VALUES(grade_id), section_id = VALUES(section_id), status = 'active'`,
+          [studentId, currentSyId, grade_id, section_id]
+        )
+
+        // Optional parent link
         if (parent_id) {
-          const [parentCheck] = await conn.query('SELECT id FROM parents WHERE id = ? AND is_deleted = 0 LIMIT 1', [
-            parent_id
-          ])
-          if (parentCheck.length) {
+          const [p] = await conn.query('SELECT id FROM parents WHERE id = ? AND is_deleted = 0 LIMIT 1', [parent_id])
+          if (p.length)
             await conn.query('INSERT INTO student_parents (student_id, parent_id) VALUES (?, ?)', [
               studentId,
               parent_id
             ])
-          }
         }
 
         await conn.commit()
-        conn.release()
+        try {
+          conn.release()
+        } catch {}
 
         return res.status(201).json({ id: studentId })
-      } catch (err) {
-        if (conn) {
-          await conn.rollback().catch(() => {})
-          conn.release().catch(() => {})
-        }
-
-        /* // Clean up uploaded file on error
-        if (pictureFile?.filepath && fs.existsSync(pictureFile.filepath)) {
-          fs.unlinkSync(pictureFile.filepath).catch(() => {})
-        } */
-
-        console.error('Create student error', err)
-        if (err && err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Duplicate entry' })
+      } catch (e) {
+        try {
+          if (conn) await conn.rollback()
+        } catch {}
+        try {
+          if (conn) conn.release()
+        } catch {}
+        console.error('Create student error', e)
+        if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Duplicate entry' })
 
         return res.status(500).json({ message: 'Internal server error' })
       }

@@ -61,58 +61,76 @@ export default async function handler(req, res) {
       SELECT
         st.id, st.lrn, st.first_name, st.last_name,
         se.grade_id, se.section_id,
-
-        at.id         AS attendance_id,
-        at.status     AS attendance_status,
+        at.id AS attendance_id,
+        at.status AS attendance_status,
         at.parent_present,
-        at.marked_by  AS attendance_marked_by,
-        at.marked_at  AS attendance_marked_at,
-
-        pmt.id        AS payment_id,
-        pmt.paid      AS payment_paid,
-        pmt.amount    AS payment_amount,
+        at.marked_by AS attendance_marked_by,
+        at.marked_at AS attendance_marked_at,
+        pmt.id AS payment_id,
+        pmt.paid AS payment_paid,
+        pmt.amount AS payment_amount,
         DATE_FORMAT(pmt.payment_date, '%Y-%m-%d') AS payment_date,
         pmt.marked_by AS payment_marked_by,
-
-        COUNT(c.id)                         AS contrib_count,
-        COALESCE(SUM(c.estimated_value),0)  AS contrib_estimated_total,
-        COALESCE(SUM(c.hours_worked),0)     AS contrib_hours_total
-
+        cs.contrib_count,
+        cs.contrib_estimated_total,
+        cs.contrib_hours_total,
+        lc.id AS last_contrib_id,
+        lc.contribution_type AS last_contrib_type,
+        lc.description AS last_contrib_description,
+        lc.estimated_value AS last_contrib_estimated_value,
+        lc.hours_worked AS last_contrib_hours_worked,
+        lc.materials_details AS last_contrib_materials_details,
+        lc.contributed_at AS last_contrib_at
       FROM student_enrollments se
-      JOIN students st
-        ON st.id = se.student_id
+      JOIN students st ON st.id = se.student_id
       LEFT JOIN attendance at
         ON at.activity_assignment_id = ? AND at.student_id = st.id
       LEFT JOIN payments pmt
         ON pmt.activity_assignment_id = ? AND pmt.student_id = st.id
-      LEFT JOIN contributions c
-        ON c.activity_assignment_id = ? AND c.student_id = st.id
-
+      LEFT JOIN (
+          SELECT
+            c.student_id,
+            COUNT(c.id) AS contrib_count,
+            COALESCE(SUM(c.estimated_value),0) AS contrib_estimated_total,
+            COALESCE(SUM(c.hours_worked),0) AS contrib_hours_total
+          FROM contributions c
+          WHERE c.activity_assignment_id = ?
+          GROUP BY c.student_id
+      ) cs ON cs.student_id = st.id
+      LEFT JOIN (
+          SELECT *
+          FROM (
+            SELECT
+              c.*,
+              ROW_NUMBER() OVER (PARTITION BY c.student_id
+                                ORDER BY c.contributed_at DESC, c.id DESC) AS rn
+            FROM contributions c
+            WHERE c.activity_assignment_id = ?
+          ) t
+          WHERE t.rn = 1
+      ) lc ON lc.student_id = st.id
       WHERE se.school_year_id = ?
         AND se.status = 'active'
         AND se.grade_id = ?
         AND se.section_id = ?
         AND st.is_deleted = 0
-
-      GROUP BY
-        st.id, st.lrn, st.first_name, st.last_name, se.grade_id, se.section_id,
-        at.id, at.status, at.parent_present, at.marked_by, at.marked_at,
-        pmt.id, pmt.paid, pmt.amount, pmt.payment_date, pmt.marked_by
-
       ORDER BY st.last_name, st.first_name
-      LIMIT ? OFFSET ?
+      LIMIT ? OFFSET ?;
+
     `
 
     const params = [
-      assignmentId,
-      assignmentId,
-      assignmentId,
+      assignmentId, // for attendance join
+      assignmentId, // for payments join
+      assignmentId, // for contributions summary
+      assignmentId, // for last_contribution subquery
       syId,
       assignment.grade_id,
       assignment.section_id,
       pageSize,
       offset
     ]
+
     const [rows] = await db.query(sql, params)
 
     const students = rows.map(r => ({
@@ -144,7 +162,18 @@ export default async function handler(req, res) {
         count: Number(r.contrib_count || 0),
         estimated_total: Number(r.contrib_estimated_total || 0),
         hours_total: Number(r.contrib_hours_total || 0)
-      }
+      },
+      last_contribution: r.last_contrib_id
+        ? {
+            id: r.last_contrib_id,
+            type: r.last_contrib_type,
+            description: r.last_contrib_description,
+            estimated_value: r.last_contrib_estimated_value == null ? null : Number(r.last_contrib_estimated_value),
+            hours_worked: r.last_contrib_hours_worked == null ? null : Number(r.last_contrib_hours_worked),
+            materials_details: r.last_contrib_materials_details,
+            contributed_at: r.last_contrib_at
+          }
+        : null
     }))
 
     // ⬅️ include fee_type & fee_amount so the UI shows contribution fields

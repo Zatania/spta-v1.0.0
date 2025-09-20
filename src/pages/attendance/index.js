@@ -88,11 +88,13 @@ export default function AttendancePage() {
         payment_date: st.payment?.payment_date ?? null,
 
         // contribution quick-entry (new row to be created on save)
-        contrib_type: '',
-        contrib_description: '',
-        contrib_estimated_value: '',
-        contrib_hours_worked: '',
-        contrib_materials_details: ''
+        // contribution quick-entry: prefill with latest saved, if any
+        contrib_type: st.last_contribution?.type || '',
+        contrib_description: st.last_contribution?.description || '',
+        contrib_estimated_value:
+          st.last_contribution?.estimated_value == null ? '' : st.last_contribution.estimated_value,
+        contrib_hours_worked: st.last_contribution?.hours_worked == null ? '' : st.last_contribution.hours_worked,
+        contrib_materials_details: st.last_contribution?.materials_details || ''
       }))
       setStudents(s)
 
@@ -217,7 +219,7 @@ export default function AttendancePage() {
       setStudents(prev =>
         prev.map(s => ({
           ...s,
-          contrib_type: 'service',
+          contrib_type: '',
           contrib_description: '',
           contrib_estimated_value: '',
           contrib_hours_worked: '',
@@ -243,7 +245,7 @@ export default function AttendancePage() {
       payment_paid: st.payment ? !!st.payment.paid : false,
       payment_amount: st.payment?.amount ?? '',
       payment_date: st.payment?.payment_date ?? null,
-      contrib_type: 'service',
+      contrib_type: '',
       contrib_description: '',
       contrib_estimated_value: '',
       contrib_hours_worked: '',

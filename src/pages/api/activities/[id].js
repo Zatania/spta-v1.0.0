@@ -82,9 +82,52 @@ export default async function handler(req, res) {
       if (session.user.role !== 'admin' && Number(a.created_by) !== Number(session.user.id)) {
         return res.status(403).json({ message: 'Forbidden' })
       }
-      await db.query('UPDATE activities SET is_deleted = 1, deleted_at = NOW() WHERE id = ?', [activityId])
 
-      return res.status(200).json({ message: 'Activity deleted (soft)' })
+      let conn
+      try {
+        conn = await db.getConnection()
+        await conn.beginTransaction()
+
+        // 1) Soft-delete the activity
+        await conn.query('UPDATE activities SET is_deleted = 1, deleted_at = NOW() WHERE id = ?', [activityId])
+
+        // 2) Delete dependent attendance + payments for all assignments of this activity
+        //    (prevents orphan rows)
+        await conn.query(
+          `DELETE FROM attendance
+             WHERE activity_assignment_id IN (
+               SELECT id FROM activity_assignments WHERE activity_id = ?
+             )`,
+          [activityId]
+        )
+        await conn.query(
+          `DELETE FROM payments
+             WHERE activity_assignment_id IN (
+               SELECT id FROM activity_assignments WHERE activity_id = ?
+             )`,
+          [activityId]
+        )
+
+        // 3) Delete the assignments themselves
+        await conn.query('DELETE FROM activity_assignments WHERE activity_id = ?', [activityId])
+
+        await conn.commit()
+        conn.release()
+
+        return res.status(200).json({ message: 'Activity deleted (soft) and assignments cleaned up' })
+      } catch (err) {
+        if (conn) {
+          try {
+            await conn.rollback()
+          } catch {}
+          try {
+            conn.release()
+          } catch {}
+        }
+        console.error('activity delete cascade error:', err)
+
+        return res.status(500).json({ message: 'Internal server error' })
+      }
     }
 
     return res.status(405).json({ message: 'Method not allowed' })

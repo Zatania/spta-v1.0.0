@@ -157,25 +157,55 @@ export default async function handler(req, res) {
         // Build assignments
         if (session.user.role === 'admin') {
           if (assignment_mode === 'ALL') {
-            await conn.query(
-              `INSERT INTO activity_assignments (activity_id, grade_id, section_id) VALUES (?, NULL, NULL)`,
-              [activityId]
+            // expand to all sections
+            const [secs] = await conn.query(
+              `SELECT s.id AS section_id, s.grade_id
+              FROM sections s
+              WHERE s.is_deleted = 0
+              ORDER BY s.grade_id, s.name`
             )
+            if (!secs.length) {
+              await conn.rollback()
+
+              return res.status(400).json({ message: 'No sections found to assign' })
+            }
+
+            const values = secs.map(r => [activityId, r.grade_id, r.section_id])
+            await conn.query(`INSERT INTO activity_assignments (activity_id, grade_id, section_id) VALUES ?`, [values])
           } else if (assignment_mode === 'GRADES') {
             if (!Array.isArray(grade_ids) || grade_ids.length === 0) {
               await conn.rollback()
 
               return res.status(400).json({ message: 'Select at least one grade' })
             }
-            const values = grade_ids.map(gid => [activityId, gid || null, null])
+
+            // expand to all sections that belong to the selected grades
+            const [secs] = await conn.query(
+              `SELECT s.id AS section_id, s.grade_id
+              FROM sections s
+              WHERE s.is_deleted = 0
+                AND s.grade_id IN ( ${grade_ids.map(() => '?').join(',')} )
+              ORDER BY s.grade_id, s.name`,
+              grade_ids
+            )
+            if (!secs.length) {
+              await conn.rollback()
+
+              return res.status(400).json({ message: 'No sections found for the selected grades' })
+            }
+
+            const values = secs.map(r => [activityId, r.grade_id, r.section_id])
             await conn.query(`INSERT INTO activity_assignments (activity_id, grade_id, section_id) VALUES ?`, [values])
           } else {
-            // optional: allow admin to target sections here if you want later
-            // for now default to ALL if omitted
-            await conn.query(
-              `INSERT INTO activity_assignments (activity_id, grade_id, section_id) VALUES (?, NULL, NULL)`,
-              [activityId]
+            // Fallback: if admin forgot to pass a mode, default to ALL sections
+            const [secs] = await conn.query(
+              `SELECT s.id AS section_id, s.grade_id
+              FROM sections s
+              WHERE s.is_deleted = 0
+              ORDER BY s.grade_id, s.name`
             )
+            const values = secs.map(r => [activityId, r.grade_id, r.section_id])
+            await conn.query(`INSERT INTO activity_assignments (activity_id, grade_id, section_id) VALUES ?`, [values])
           }
         } else if (session.user.role === 'teacher') {
           // must be a section the teacher is assigned to (current SY)
@@ -187,9 +217,9 @@ export default async function handler(req, res) {
 
           const [[ok]] = await conn.query(
             `SELECT 1 AS ok
-               FROM teacher_sections
-              WHERE user_id = ? AND section_id = ? AND school_year_id = ?
-              LIMIT 1`,
+            FROM teacher_sections
+            WHERE user_id = ? AND section_id = ? AND school_year_id = ?
+            LIMIT 1`,
             [session.user.id, section_id, syId]
           )
           if (!ok) {
@@ -197,9 +227,10 @@ export default async function handler(req, res) {
 
             return res.status(403).json({ message: 'Forbidden: not your section (current SY)' })
           }
+
           await conn.query(
             `INSERT INTO activity_assignments (activity_id, grade_id, section_id)
-             VALUES (?, (SELECT grade_id FROM sections WHERE id = ?), ?)`,
+     VALUES (?, (SELECT grade_id FROM sections WHERE id = ?), ?)`,
             [activityId, section_id, section_id]
           )
         } else {

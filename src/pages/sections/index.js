@@ -36,8 +36,7 @@ export default function SectionsPage() {
   const [search, setSearch] = useState('')
   const [filterGrade, setFilterGrade] = useState('')
   const [filterAssigned, setFilterAssigned] = useState('')
-  const [page, setPage] = useState(0)
-  const [pageSize, setPageSize] = useState(10)
+  const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 10 })
   const [rowCount, setRowCount] = useState(0)
 
   const fetchSections = async () => {
@@ -49,8 +48,8 @@ export default function SectionsPage() {
           search,
           grade_id: filterGrade || undefined,
           assigned: filterAssigned || undefined,
-          page: page + 1, // assuming backend is 1-based page
-          pageSize
+          page: paginationModel.page + 1,
+          page_size: paginationModel.pageSize
         }
       })
       setSections(data.sections ?? [])
@@ -73,7 +72,7 @@ export default function SectionsPage() {
 
   useEffect(() => {
     fetchSections()
-  }, [search, filterGrade, filterAssigned, page, pageSize])
+  }, [search, filterGrade, filterAssigned, paginationModel])
 
   useEffect(() => {
     fetchGrades()
@@ -119,7 +118,6 @@ export default function SectionsPage() {
   }
 
   const columns = [
-    { field: 'id', headerName: 'ID', width: 80 },
     { field: 'grade_name', headerName: 'Grade', flex: 1 },
     { field: 'section_name', headerName: 'Section', flex: 2 },
     {
@@ -154,7 +152,6 @@ export default function SectionsPage() {
           value={search}
           onChange={e => {
             setSearch(e.target.value)
-            setPage(0)
           }}
           InputProps={{
             startAdornment: (
@@ -172,7 +169,6 @@ export default function SectionsPage() {
           value={filterGrade}
           onChange={e => {
             setFilterGrade(e.target.value)
-            setPage(0)
           }}
         >
           <MenuItem value=''>All Grades</MenuItem>
@@ -189,7 +185,6 @@ export default function SectionsPage() {
           value={filterAssigned}
           onChange={e => {
             setFilterAssigned(e.target.value)
-            setPage(0)
           }}
           sx={{ minWidth: 160 }}
         >
@@ -215,17 +210,11 @@ export default function SectionsPage() {
             rows={sections}
             columns={columns}
             autoHeight
-            pagination
-            pageSize={pageSize}
-            page={page}
             rowCount={rowCount}
             paginationMode='server'
-            onPageChange={newPage => setPage(newPage)}
-            onPageSizeChange={newSize => {
-              setPageSize(newSize)
-              setPage(0)
-            }}
-            rowsPerPageOptions={[10, 25, 50]}
+            paginationModel={paginationModel}
+            onPaginationModelChange={model => setPaginationModel(model)}
+            pageSizeOptions={[10, 25, 50]}
             getRowId={r => r.id}
           />
         </div>

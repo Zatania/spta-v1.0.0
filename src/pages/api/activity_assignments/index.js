@@ -52,7 +52,10 @@ export default async function handler(req, res) {
       const total = countRows[0]?.total ?? 0
 
       const sql = `
-        SELECT aa.id, aa.activity_id, a.title, a.activity_date, a.payments_enabled, aa.grade_id, aa.section_id, g.name AS grade_name, s.name AS section_name
+        SELECT aa.id, aa.activity_id, a.title, a.activity_date, a.payments_enabled,
+          a.fee_type, a.fee_amount,
+          aa.grade_id, aa.section_id,
+          g.name AS grade_name, s.name AS section_name
         FROM activity_assignments aa
         JOIN activities a ON a.id = aa.activity_id AND a.is_deleted = 0
         JOIN grades g ON g.id = aa.grade_id

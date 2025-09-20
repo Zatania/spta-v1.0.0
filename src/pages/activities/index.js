@@ -1,5 +1,5 @@
 // pages/activities.js
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import {
   Box,
   Button,
@@ -42,8 +42,13 @@ export default function ActivitiesPage() {
     title: '',
     activity_date: '',
     payments_enabled: true,
-    fee_type: 'fee',
+
+    // Stored but only rendered for admins; teachers don’t see or edit these inputs
+    fee_type: 'none',
     fee_amount: '',
+
+    // for edit checks
+    created_by: null,
 
     // admin-only
     apply_all_grades: true,
@@ -52,6 +57,7 @@ export default function ActivitiesPage() {
     // teacher-only
     section_id: ''
   }
+
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
 
@@ -94,14 +100,30 @@ export default function ActivitiesPage() {
     }
   }
 
+  const teacherSections = useMemo(() => me?.teacher?.assigned_sections ?? [], [me])
+
   const openCreate = () => {
     const base = { ...emptyForm }
 
-    // If teacher with single assigned section, preselect it
-    if (isTeacher) {
-      const secs = me?.teacher?.assigned_sections ?? []
-      if (secs.length === 1) base.section_id = String(secs[0].id)
+    // Teachers: preselect a section if they only have one
+    if (isTeacher && teacherSections.length === 1) {
+      base.section_id = String(teacherSections[0].id)
     }
+
+    // Teachers: start with payments enabled OFF and fee_type 'none' by default
+    if (isTeacher) {
+      base.payments_enabled = false
+      base.fee_type = 'none'
+    }
+
+    // Admins can choose any fee_type; default to 'none'
+    if (isAdmin) {
+      base.fee_type = 'none'
+      base.fee_amount = ''
+      base.apply_all_grades = true
+      base.selected_grade_ids = []
+    }
+
     setForm(base)
     setOpen(true)
   }
@@ -120,10 +142,11 @@ export default function ActivitiesPage() {
       title: row.title,
       activity_date: row.activity_date,
       payments_enabled: !!row.payments_enabled,
-      fee_type: row.fee_type || 'fee',
-      fee_amount: row.fee_amount ?? ''
+      fee_type: row.fee_type || 'none',
+      fee_amount: row.fee_amount ?? '',
+      created_by: row.created_by
 
-      // Editing assignment scope is not handled here to keep UI simple.
+      // We intentionally do not re-open assignment scope in this dialog.
     })
     setOpen(true)
   }
@@ -135,43 +158,85 @@ export default function ActivitiesPage() {
       return
     }
 
+    const creating = !form.id
+
+    // Build payload role-aware
     const payload = {
       title: form.title,
-      activity_date: form.activity_date,
-      payments_enabled: form.payments_enabled ? 1 : 0,
-      fee_type: form.fee_type,
-      fee_amount: form.fee_amount !== '' ? Number(form.fee_amount) : null
+      activity_date: form.activity_date
     }
 
-    // Admin: choose scope (ALL grades or selected grades)
+    // ==== Admin logic (full control on policy/fees) ====
     if (isAdmin) {
+      // Sanitize fee fields
+      const ft = form.fee_type || 'none'
+
+      const fa =
+        ft === 'fee' || ft === 'mixed'
+          ? form.fee_amount !== '' && form.fee_amount != null
+            ? Number(form.fee_amount)
+            : null
+          : null
+
+      payload.fee_type = ft
+      payload.fee_amount = fa
+      payload.payments_enabled = form.payments_enabled ? 1 : 0
+
+      // Admin scope
       payload.assignment_mode = form.apply_all_grades ? 'ALL' : 'GRADES'
       payload.grade_ids = form.apply_all_grades ? [] : form.selected_grade_ids.map(String)
     }
 
-    // Teacher: must choose a section (one of their sections)
+    // ==== Teacher logic (simple switch only) ====
     if (isTeacher) {
-      const secs = me?.teacher?.assigned_sections ?? []
-      if (secs.length === 0) {
-        alert('No assigned section found.')
+      // Teachers don’t set fee type explicitly.
+      // Behavior:
+      //  - On CREATE:
+      //     payments_enabled = false → fee_type = 'none'
+      //     payments_enabled = true  → fee_type = 'mixed'  (attendance shows payments + contributions)
+      //  - On UPDATE:
+      //     If they flip payments from OFF→ON and current fee_type is 'none',
+      //     also set fee_type = 'mixed' so payments column appears on attendance.
+      const willEnable = !!form.payments_enabled
 
-        return
-      }
-      if (!form.section_id) {
-        alert('Please choose a section.')
+      payload.payments_enabled = willEnable ? 1 : 0
 
-        return
+      if (creating) {
+        payload.fee_type = willEnable ? 'mixed' : 'none'
+        payload.fee_amount = null
+      } else {
+        // Only include fee_type when we need to lift it from 'none' to 'mixed'
+        if (willEnable && (form.fee_type === 'none' || !form.fee_type)) {
+          // Only do this if the teacher is the creator (teachers can only edit their own activities anyway)
+          if (Number(form.created_by) === Number(session?.user?.id)) {
+            payload.fee_type = 'mixed'
+          }
+        }
       }
-      payload.assignment_mode = 'SECTION'
-      payload.section_id = String(form.section_id)
+
+      // Teacher scope: must target one of their sections
+      if (creating) {
+        if (!teacherSections.length) {
+          alert('No assigned section found.')
+
+          return
+        }
+        if (!form.section_id) {
+          alert('Please choose a section.')
+
+          return
+        }
+        payload.assignment_mode = 'SECTION'
+        payload.section_id = String(form.section_id)
+      }
     }
 
     setSaving(true)
     try {
-      if (form.id) {
-        await axios.put(`/api/activities/${form.id}`, payload)
-      } else {
+      if (creating) {
         await axios.post('/api/activities', payload)
+      } else {
+        await axios.put(`/api/activities/${form.id}`, payload)
       }
       setOpen(false)
       fetchActivities()
@@ -184,14 +249,26 @@ export default function ActivitiesPage() {
   }
 
   const handleTogglePaymentsInline = async (row, checked) => {
-    // optimistic
+    // Optimistic toggle
     const id = row.id
-
     setActivities(prev => prev.map(a => (a.id === id ? { ...a, payments_enabled: checked } : a)))
+
     try {
-      await axios.put(`/api/activities/${id}`, { payments_enabled: checked ? 1 : 0 })
+      // Teachers toggling ON for their own activity: make sure fee_type is lifted to 'mixed' if needed
+      const extra =
+        isTeacher &&
+        Number(row.created_by) === Number(session?.user?.id) &&
+        checked &&
+        (!row.fee_type || row.fee_type === 'none')
+          ? { fee_type: 'mixed' }
+          : {}
+
+      await axios.put(`/api/activities/${id}`, {
+        payments_enabled: checked ? 1 : 0,
+        ...extra
+      })
     } catch (err) {
-      // revert
+      // revert on error
       setActivities(prev => prev.map(a => (a.id === id ? { ...a, payments_enabled: !checked } : a)))
 
       const msg =
@@ -225,8 +302,8 @@ export default function ActivitiesPage() {
     },
     {
       field: 'fee',
-      headerName: 'Fee',
-      width: 120,
+      headerName: 'Fee / Type',
+      width: 160,
       valueGetter: p => {
         const t = p.row.fee_type
         if (!t || t === 'none') return 'None'
@@ -238,7 +315,7 @@ export default function ActivitiesPage() {
     },
     {
       field: 'payments_enabled',
-      headerName: 'Payments',
+      headerName: 'Collections',
       width: 150,
       renderCell: params => {
         const canToggle =
@@ -255,7 +332,7 @@ export default function ActivitiesPage() {
                 size='small'
               />
             }
-            label={params.row.payments_enabled ? 'Enabled' : 'Disabled'}
+            label={params.row.payments_enabled ? 'On' : 'Off'}
           />
         )
       }
@@ -287,8 +364,6 @@ export default function ActivitiesPage() {
     }
   ]
 
-  const teacherSections = me?.teacher?.assigned_sections ?? []
-
   return (
     <Box p={3}>
       <Box display='flex' justifyContent='space-between' mb={2}>
@@ -305,6 +380,7 @@ export default function ActivitiesPage() {
       {/* Create/Edit dialog */}
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth='sm'>
         <DialogTitle>{form.id ? 'Edit Activity' : 'Create Activity'}</DialogTitle>
+
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <TextField
             label='Title'
@@ -312,6 +388,7 @@ export default function ActivitiesPage() {
             onChange={e => setForm({ ...form, title: e.target.value })}
             fullWidth
           />
+
           <TextField
             type='date'
             label='Date'
@@ -321,41 +398,61 @@ export default function ActivitiesPage() {
             fullWidth
           />
 
-          {/* Fee settings (schema-aware) */}
-          <TextField
-            select
-            label='Fee type'
-            value={form.fee_type}
-            onChange={e => setForm({ ...form, fee_type: e.target.value })}
-            fullWidth
-          >
-            <MenuItem value='fee'>Fee</MenuItem>
-            <MenuItem value='donation'>Donation</MenuItem>
-            <MenuItem value='service'>Service</MenuItem>
-            <MenuItem value='mixed'>Mixed</MenuItem>
-            <MenuItem value='none'>None</MenuItem>
-          </TextField>
+          {/* Admin-only: fee policy */}
+          {isAdmin && (
+            <>
+              <TextField
+                select
+                label='Fee type'
+                value={form.fee_type}
+                onChange={e => setForm({ ...form, fee_type: e.target.value })}
+                fullWidth
+              >
+                <MenuItem value='fee'>Fee (money required)</MenuItem>
+                <MenuItem value='donation'>Donation (money/materials/service)</MenuItem>
+                <MenuItem value='service'>Service/Labor required</MenuItem>
+                <MenuItem value='mixed'>Mixed (accept money & contributions)</MenuItem>
+                <MenuItem value='none'>None</MenuItem>
+              </TextField>
 
-          {(form.fee_type === 'fee' || form.fee_type === 'mixed') && (
-            <TextField
-              type='number'
-              inputProps={{ step: '0.01', min: 0 }}
-              label='Fee amount'
-              value={form.fee_amount}
-              onChange={e => setForm({ ...form, fee_amount: e.target.value })}
-              fullWidth
+              {(form.fee_type === 'fee' || form.fee_type === 'mixed') && (
+                <TextField
+                  type='number'
+                  inputProps={{ step: '0.01', min: 0 }}
+                  label='Fee amount (optional)'
+                  value={form.fee_amount}
+                  onChange={e => setForm({ ...form, fee_amount: e.target.value })}
+                  fullWidth
+                />
+              )}
+            </>
+          )}
+
+          {/* Teachers: they only toggle collections; fee type is inferred on the backend */}
+          {isTeacher && (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!form.payments_enabled}
+                  onChange={e => setForm({ ...form, payments_enabled: e.target.checked })}
+                />
+              }
+              label='Allow collections (money or contributions)'
             />
           )}
 
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={!!form.payments_enabled}
-                onChange={e => setForm({ ...form, payments_enabled: e.target.checked })}
-              />
-            }
-            label='Payments enabled'
-          />
+          {/* Admins may also toggle payment collection switch (kept for convenience) */}
+          {isAdmin && (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!form.payments_enabled}
+                  onChange={e => setForm({ ...form, payments_enabled: e.target.checked })}
+                />
+              }
+              label='Collections enabled'
+            />
+          )}
 
           {/* Admin scope controls */}
           {isAdmin && (
@@ -394,8 +491,8 @@ export default function ActivitiesPage() {
             </>
           )}
 
-          {/* Teacher scope control */}
-          {isTeacher && (
+          {/* Teacher scope control on CREATE only */}
+          {isTeacher && !form.id && (
             <TextField
               select
               label='Your section'
@@ -411,6 +508,7 @@ export default function ActivitiesPage() {
             </TextField>
           )}
         </DialogContent>
+
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
           <Button variant='contained' onClick={saveActivity} disabled={saving}>

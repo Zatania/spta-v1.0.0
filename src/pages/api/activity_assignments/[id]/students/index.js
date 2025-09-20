@@ -1,17 +1,9 @@
 // pages/api/activity_assignments/[id]/students.js
 import { getServerSession } from 'next-auth/next'
-import { authOptions } from '../../../auth/[...nextauth]' // adjust path if needed
-import db from '../../../db' // adjust db path
+import { authOptions } from '../../../auth/[...nextauth]'
+import db from '../../../db'
+import { getCurrentSchoolYearId } from '../../../lib/schoolYear'
 
-/**
- * GET /api/activity_assignments/:id/students
- * Query: page (1-based), page_size
- * Response: { total, page, page_size, students: [...] }
- *
- * Permission:
- *  - admin: any
- *  - teacher: only for their assigned section
- */
 export default async function handler(req, res) {
   const { id } = req.query
   const assignmentId = Number(id)
@@ -22,51 +14,105 @@ export default async function handler(req, res) {
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
     const page = Math.max(1, Number(req.query.page || 1))
-    const page_size = Math.max(1, Math.min(1000, Number(req.query.page_size || 50)))
-    const offset = (page - 1) * page_size
+    const pageSize = Math.max(1, Math.min(1000, Number(req.query.page_size || 50)))
+    const offset = (page - 1) * pageSize
+    const syId = await getCurrentSchoolYearId()
 
-    // verify assignment and section/grade, also fetch payments_enabled from activities
+    // assignment + activity flags (now includes fee_type/fee_amount)
     const [assRows] = await db.query(
-      `SELECT aa.id, aa.activity_id, aa.grade_id, aa.section_id, a.payments_enabled
-       FROM activity_assignments aa
-       JOIN activities a ON a.id = aa.activity_id
-       WHERE aa.id = ? LIMIT 1`,
+      `SELECT aa.id, aa.activity_id, aa.grade_id, aa.section_id,
+              a.payments_enabled, a.fee_type, a.fee_amount
+         FROM activity_assignments aa
+         JOIN activities a ON a.id = aa.activity_id
+        WHERE aa.id = ?
+        LIMIT 1`,
       [assignmentId]
     )
     if (!assRows.length) return res.status(404).json({ message: 'Assignment not found' })
     const assignment = assRows[0]
 
-    // teacher permission
+    // permission for teachers (current SY)
     if (session.user.role === 'teacher') {
-      const [ok] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-        session.user.id,
-        assignment.section_id
-      ])
+      const [ok] = await db.query(
+        `SELECT 1 FROM teacher_sections
+          WHERE user_id = ? AND section_id = ? AND school_year_id = ?
+          LIMIT 1`,
+        [session.user.id, assignment.section_id, syId]
+      )
       if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
     }
 
-    // count total students in that grade/section (non-deleted)
+    // total students via enrollments
     const [countRows] = await db.query(
-      'SELECT COUNT(*) AS total FROM students st WHERE st.is_deleted = 0 AND st.grade_id = ? AND st.section_id = ?',
-      [assignment.grade_id, assignment.section_id]
+      `SELECT COUNT(*) AS total
+         FROM student_enrollments se
+         JOIN students st ON st.id = se.student_id
+        WHERE se.school_year_id = ?
+          AND se.status = 'active'
+          AND se.grade_id = ?
+          AND se.section_id = ?
+          AND st.is_deleted = 0`,
+      [syId, assignment.grade_id, assignment.section_id]
     )
     const total = countRows[0]?.total ?? 0
 
-    // fetch page with left joins for attendance & payments
+    // page data + joins
     const sql = `
-      SELECT st.id, st.lrn, st.first_name, st.last_name, st.grade_id, st.section_id,
-        at.id AS attendance_id, at.status AS attendance_status, at.parent_present AS parent_present,
-        at.marked_by AS attendance_marked_by, at.marked_at AS attendance_marked_at,
-        pmt.id AS payment_id, pmt.paid AS payment_paid, DATE_FORMAT(pmt.payment_date, '%Y-%m-%d') AS payment_date,
-        pmt.marked_by AS payment_marked_by
-      FROM students st
-      LEFT JOIN attendance at ON at.activity_assignment_id = ? AND at.student_id = st.id
-      LEFT JOIN payments pmt ON pmt.activity_assignment_id = ? AND pmt.student_id = st.id
-      WHERE st.is_deleted = 0 AND st.grade_id = ? AND st.section_id = ?
+      SELECT
+        st.id, st.lrn, st.first_name, st.last_name,
+        se.grade_id, se.section_id,
+
+        at.id         AS attendance_id,
+        at.status     AS attendance_status,
+        at.parent_present,
+        at.marked_by  AS attendance_marked_by,
+        at.marked_at  AS attendance_marked_at,
+
+        pmt.id        AS payment_id,
+        pmt.paid      AS payment_paid,
+        pmt.amount    AS payment_amount,
+        DATE_FORMAT(pmt.payment_date, '%Y-%m-%d') AS payment_date,
+        pmt.marked_by AS payment_marked_by,
+
+        COUNT(c.id)                         AS contrib_count,
+        COALESCE(SUM(c.estimated_value),0)  AS contrib_estimated_total,
+        COALESCE(SUM(c.hours_worked),0)     AS contrib_hours_total
+
+      FROM student_enrollments se
+      JOIN students st
+        ON st.id = se.student_id
+      LEFT JOIN attendance at
+        ON at.activity_assignment_id = ? AND at.student_id = st.id
+      LEFT JOIN payments pmt
+        ON pmt.activity_assignment_id = ? AND pmt.student_id = st.id
+      LEFT JOIN contributions c
+        ON c.activity_assignment_id = ? AND c.student_id = st.id
+
+      WHERE se.school_year_id = ?
+        AND se.status = 'active'
+        AND se.grade_id = ?
+        AND se.section_id = ?
+        AND st.is_deleted = 0
+
+      GROUP BY
+        st.id, st.lrn, st.first_name, st.last_name, se.grade_id, se.section_id,
+        at.id, at.status, at.parent_present, at.marked_by, at.marked_at,
+        pmt.id, pmt.paid, pmt.amount, pmt.payment_date, pmt.marked_by
+
       ORDER BY st.last_name, st.first_name
       LIMIT ? OFFSET ?
     `
-    const params = [assignmentId, assignmentId, assignment.grade_id, assignment.section_id, page_size, offset]
+
+    const params = [
+      assignmentId,
+      assignmentId,
+      assignmentId,
+      syId,
+      assignment.grade_id,
+      assignment.section_id,
+      pageSize,
+      offset
+    ]
     const [rows] = await db.query(sql, params)
 
     const students = rows.map(r => ({
@@ -89,18 +135,27 @@ export default async function handler(req, res) {
         ? {
             id: r.payment_id,
             paid: !!r.payment_paid,
+            amount: r.payment_amount == null ? null : Number(r.payment_amount),
             payment_date: r.payment_date,
             marked_by: r.payment_marked_by
           }
-        : null
+        : null,
+      contributions_summary: {
+        count: Number(r.contrib_count || 0),
+        estimated_total: Number(r.contrib_estimated_total || 0),
+        hours_total: Number(r.contrib_hours_total || 0)
+      }
     }))
 
+    // ⬅️ include fee_type & fee_amount so the UI shows contribution fields
     return res.status(200).json({
       total,
       page,
-      page_size,
+      page_size: pageSize,
       students,
-      payments_enabled: assignment.payments_enabled
+      payments_enabled: assignment.payments_enabled,
+      fee_type: assignment.fee_type,
+      fee_amount: assignment.fee_amount
     })
   } catch (err) {
     console.error('GET /activity_assignments/:id/students error:', err)

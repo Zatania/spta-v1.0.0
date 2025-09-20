@@ -468,7 +468,10 @@ export default function TeacherDashboard() {
     { field: 'present_count', headerName: 'Present', flex: 0.4 },
     { field: 'absent_count', headerName: 'Absent', flex: 0.4 },
     { field: 'paid_count', headerName: 'Paid', flex: 0.4 },
-    { field: 'unpaid_count', headerName: 'Unpaid', flex: 0.4 }
+    { field: 'unpaid_count', headerName: 'Unpaid', flex: 0.4 },
+    { field: 'contrib_students', headerName: 'With Contributions', flex: 0.6 },
+    { field: 'contrib_hours_total', headerName: 'Hours (Σ)', flex: 0.5 },
+    { field: 'contrib_estimated_total', headerName: 'Est. Value (Σ)', flex: 0.6 }
   ]
 
   const getStatusColor = status => {
@@ -637,6 +640,48 @@ export default function TeacherDashboard() {
             </CardContent>
           </Card>
         </Grid>
+
+        {/* Contributions Chart */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Typography variant='h6' gutterBottom>
+                Contributions Overview
+              </Typography>
+              <Box sx={{ height: 300 }}>
+                <Bar
+                  data={{
+                    labels: rows.map(row => row.title),
+                    datasets: [
+                      {
+                        label: 'Parents Contributed',
+                        data: rows.map(row => Math.round(Number(row.contrib_students) || 0)),
+                        backgroundColor: '#7E57C2',
+                        borderColor: '#7E57C2',
+                        borderWidth: 1
+                      },
+                      {
+                        label: 'Total Hours',
+                        data: rows.map(row => Math.round(Number(row.contrib_hours_total) || 0)),
+                        backgroundColor: '#009688',
+                        borderColor: '#009688',
+                        borderWidth: 1
+                      },
+                      {
+                        label: 'Total Est. Value',
+                        data: rows.map(row => Math.round(Number(row.contrib_estimated_total) || 0)),
+                        backgroundColor: '#795548',
+                        borderColor: '#795548',
+                        borderWidth: 1
+                      }
+                    ]
+                  }}
+                  options={chartOptions}
+                />
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
       </Grid>
 
       {/* Main Summary Table */}
@@ -736,6 +781,15 @@ export default function TeacherDashboard() {
                         <strong>Payment Date</strong>
                       </TableCell>
                       <TableCell>
+                        <strong>Contrib?</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Contrib Hours</strong>
+                      </TableCell>
+                      <TableCell>
+                        <strong>Contrib Est. Value</strong>
+                      </TableCell>
+                      <TableCell>
                         <strong>Parents</strong>
                       </TableCell>
                       <TableCell>
@@ -798,6 +852,26 @@ export default function TeacherDashboard() {
                         <TableCell>
                           <Typography variant='body2'>
                             {student.payment_date ? dayjs(student.payment_date).format('MMM DD, YYYY') : '-'}
+                          </Typography>
+                        </TableCell>
+
+                        <TableCell>
+                          {student.contrib_count > 0 ? (
+                            <Chip
+                              label={`${student.contrib_count} entr${student.contrib_count > 1 ? 'ies' : 'y'}`}
+                              size='small'
+                              color='secondary'
+                            />
+                          ) : (
+                            <Chip label='None' size='small' variant='outlined' />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant='body2'>{Number(student.contrib_hours_total || 0).toFixed(2)}</Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant='body2'>
+                            {Number(student.contrib_estimated_total || 0).toFixed(2)}
                           </Typography>
                         </TableCell>
                         <TableCell>

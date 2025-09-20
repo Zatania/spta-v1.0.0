@@ -2,6 +2,7 @@
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../../../auth/[...nextauth]'
 import db from '../../../../db'
+import { getCurrentSchoolYearId } from '../../../../lib/schoolYear'
 
 /**
  * GET /api/teacher/activity/:activityId/students
@@ -20,6 +21,7 @@ export default async function handler(req, res) {
   const page = Math.max(1, Number(req.query.page ?? 1))
   const pageSize = Math.min(200, Math.max(1, Number(req.query.page_size ?? 50)))
   const search = (req.query.search ?? '').trim()
+  const syId = await getCurrentSchoolYearId()
 
   try {
     // Validate teacher visibility: created_by or assigned section
@@ -28,19 +30,20 @@ export default async function handler(req, res) {
       SELECT DISTINCT a.id
       FROM activities a
       LEFT JOIN activity_assignments aa ON aa.activity_id = a.id
-      LEFT JOIN teacher_sections ts ON ts.section_id = aa.section_id
+      LEFT JOIN teacher_sections ts ON ts.section_id = aa.section_id AND ts.school_year_id = ?
       WHERE a.id = ?
         AND (a.created_by = ? OR ts.user_id = ?)
         AND a.is_deleted = 0
+        AND a.school_year_id = ?
     `,
-      [activityId, teacherId, teacherId]
+      [syId, activityId, teacherId, teacherId, syId]
     )
 
     if (visible.length === 0) return res.status(404).json({ message: 'Activity not found' })
 
     // Build list of activity_assignment_ids the teacher can view
-    const params = [activityId, teacherId]
-    let aaWhere = ' WHERE aa.activity_id = ? AND ts.user_id = ? '
+    const params = [activityId, teacherId, syId]
+    let aaWhere = ' WHERE aa.activity_id = ? AND ts.user_id = ? AND ts.school_year_id = ? '
     if (sectionId) {
       aaWhere += ' AND aa.section_id = ?'
       params.push(sectionId)
@@ -67,14 +70,16 @@ export default async function handler(req, res) {
 
     const [countRows] = await db.query(
       `
-      SELECT COUNT(*) AS total
-      FROM students st
-      JOIN sections s ON s.id = st.section_id
-      WHERE st.section_id IN (${assignments.map(() => '?').join(',')})
-        AND st.is_deleted = 0
-        ${search ? 'AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)' : ''}
-    `,
-      search ? [...assignments.map(a => a.section_id), like, like, like] : assignments.map(a => a.section_id)
+        SELECT COUNT(*) AS total
+        FROM student_enrollments se
+        JOIN students st ON st.id = se.student_id AND st.is_deleted = 0
+        WHERE se.section_id IN (${assignments.map(() => '?').join(',')})
+          AND se.school_year_id = ?
+          ${search ? 'AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)' : ''}
+      `,
+      search
+        ? [...assignments.map(a => a.section_id), syId, like, like, like]
+        : [...assignments.map(a => a.section_id), syId]
     )
     const total = countRows[0]?.total ?? 0
 
@@ -83,28 +88,29 @@ export default async function handler(req, res) {
 
     const [rows] = await db.query(
       `
-      SELECT
-        st.id,
-        st.lrn,
-        st.first_name,
-        st.last_name,
-        st.picture_url,
-        st.grade_id,
-        st.section_id,
-        s.name AS section_name,
-        g.name AS grade_name
-      FROM students st
-      JOIN sections s ON s.id = st.section_id
-      JOIN grades g   ON g.id = st.grade_id
-      WHERE st.section_id IN (${assignments.map(() => '?').join(',')})
-        AND st.is_deleted = 0
-        ${search ? 'AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)' : ''}
-      ORDER BY st.last_name ASC, st.first_name ASC
-      LIMIT ? OFFSET ?
-    `,
+        SELECT
+          st.id,
+          st.lrn,
+          st.first_name,
+          st.last_name,
+          st.picture_url,
+          se.grade_id,
+          se.section_id,
+          s.name AS section_name,
+          g.name AS grade_name
+        FROM student_enrollments se
+        JOIN students st ON st.id = se.student_id AND st.is_deleted = 0
+        JOIN sections s  ON s.id = se.section_id
+        JOIN grades g    ON g.id = se.grade_id
+        WHERE se.section_id IN (${assignments.map(() => '?').join(',')})
+          AND se.school_year_id = ?
+          ${search ? 'AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)' : ''}
+        ORDER BY st.last_name ASC, st.first_name ASC
+        LIMIT ? OFFSET ?
+      `,
       search
-        ? [...assignments.map(a => a.section_id), like, like, like, pageSize, offset]
-        : [...assignments.map(a => a.section_id), pageSize, offset]
+        ? [...assignments.map(a => a.section_id), syId, like, like, like, pageSize, offset]
+        : [...assignments.map(a => a.section_id), syId, pageSize, offset]
     )
 
     // Attendance + payments for each student per its matching activity_assignment
@@ -115,6 +121,7 @@ export default async function handler(req, res) {
     const studentIds = rows.map(r => r.id)
     let attendanceMap = new Map()
     let paymentMap = new Map()
+    let contribMap = new Map()
 
     if (studentIds.length) {
       // Get attendance data
@@ -176,6 +183,34 @@ export default async function handler(req, res) {
           }
         ])
       )
+
+      // Contributions (aggregate per student)
+      const [contribRows] = await db.query(
+        `
+            SELECT
+              c.student_id,
+              aa.section_id,
+              COUNT(*) AS contrib_count,
+              COALESCE(SUM(c.hours_worked),0) AS hours_total,
+              COALESCE(SUM(c.estimated_value),0) AS value_total
+            FROM contributions c
+            JOIN activity_assignments aa ON aa.id = c.activity_assignment_id
+            WHERE aa.id IN (${aaIds.map(() => '?').join(',')})
+              AND c.student_id IN (${studentIds.map(() => '?').join(',')})
+            GROUP BY c.student_id, aa.section_id
+          `,
+        [...aaIds, ...studentIds]
+      )
+      contribMap = new Map(
+        contribRows.map(r => [
+          `${r.student_id}:${r.section_id}`,
+          {
+            count: Number(r.contrib_count || 0),
+            hours_total: Number(r.hours_total || 0),
+            value_total: Number(r.value_total || 0)
+          }
+        ])
+      )
     }
 
     // Parents per student
@@ -213,6 +248,7 @@ export default async function handler(req, res) {
       const aaId = mapSectionToAa.get(r.section_id)
       const att = attendanceMap.get(`${r.id}:${r.section_id}`) || null
       const pay = paymentMap.get(`${r.id}:${r.section_id}`) || null
+      const con = contribMap.get(`${r.id}:${r.section_id}`) || { count: 0, hours_total: 0, value_total: 0 }
       const parentsList = parentsByStudent.get(r.id) || []
 
       return {
@@ -223,6 +259,9 @@ export default async function handler(req, res) {
         parent_present: att?.parent_present ?? false,
         attendance_marked_at: att?.marked_at ?? null,
         attendance_marked_by: att?.marked_by_name ?? null,
+        contrib_count: con.count,
+        contrib_hours_total: con.hours_total,
+        contrib_estimated_total: con.value_total,
         payment_paid: pay?.paid ?? null,
         payment_date: pay?.payment_date ?? null,
         payment_marked_at: pay?.payment_marked_at ?? null,

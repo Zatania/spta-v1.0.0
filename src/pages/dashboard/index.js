@@ -2279,7 +2279,7 @@ const Dashboard = () => {
       setLoadingSY(true)
       try {
         const { data } = await axios.get('/api/school-years')
-        const list = data.school_years || []
+        const list = Array.isArray(data) ? data : data?.school_years || []
         setSchoolYears(list)
         const current = list.find(sy => sy.is_current === 1) || list[0]
         setSchoolYearId(current?.id ?? null)

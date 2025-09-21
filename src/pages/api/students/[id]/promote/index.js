@@ -1,7 +1,7 @@
 // pages/api/students/[id]/promote.js
 import { getServerSession } from 'next-auth/next'
-import { authOptions } from '../../auth/[...nextauth]'
-import db from '../../db'
+import { authOptions } from '../../../auth/[...nextauth]'
+import db from '../../../db'
 import { getCurrentSchoolYearId, getNextSchoolYearId } from '../../../lib/schoolYear'
 
 export default async function handler(req, res) {

@@ -1,7 +1,7 @@
 // pages/api/students/[id]/transfer.js
 import { getServerSession } from 'next-auth/next'
-import { authOptions } from '../../auth/[...nextauth]'
-import db from '../../db'
+import { authOptions } from '../../../auth/[...nextauth]'
+import db from '../../../db'
 import { getCurrentSchoolYearId } from '../../../lib/schoolYear'
 
 export default async function handler(req, res) {

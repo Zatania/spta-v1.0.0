@@ -5,6 +5,7 @@ import db from '../../../db'
 import PDFDocument from 'pdfkit'
 import fs from 'fs'
 import path from 'path'
+import { getCurrentSchoolYearId } from '../../../lib/schoolYear'
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
@@ -19,104 +20,85 @@ export default async function handler(req, res) {
 
   const teacherId = isTeacher ? session.user.id : null
   const studentId = Number(req.query.student_id)
-  const schoolYear = (req.query.school_year || '').trim()
-  const isPreview = req.query.preview === 'true' // Check if this is a preview request
+  const schoolYearName = (req.query.school_year || '').trim() // e.g. "2025-2026"
+  const isPreview = req.query.preview === 'true'
 
   if (!studentId) return res.status(400).json({ message: 'student_id is required' })
 
   try {
-    // --- Load student info ---
+    // ---- Resolve School Year ID (use provided name if valid, else current) ----
+    let syId = null
+    if (schoolYearName) {
+      const [syRows] = await db.query(`SELECT id FROM school_years WHERE name = ? LIMIT 1`, [schoolYearName])
+      if (syRows.length) syId = syRows[0].id
+    }
+    if (!syId) syId = await getCurrentSchoolYearId()
+
+    // ---- Load student + enrollment for the resolved school year ----
     const [studentRows] = await db.query(
       `
-      SELECT st.id, st.first_name, st.last_name, st.lrn, st.grade_id, st.section_id,
-             g.name AS grade_name, s.name AS section_name
+      SELECT
+        st.id, st.first_name, st.last_name, st.lrn,
+        se.grade_id, se.section_id,
+        g.name  AS grade_name,
+        s.name  AS section_name
       FROM students st
-      JOIN grades g ON g.id = st.grade_id
-      JOIN sections s ON s.id = st.section_id
+      JOIN student_enrollments se
+        ON se.student_id = st.id
+       AND se.school_year_id = ?
+       AND se.status = 'active'
+      JOIN grades g  ON g.id = se.grade_id
+      JOIN sections s ON s.id = se.section_id
       WHERE st.id = ? AND st.is_deleted = 0
       LIMIT 1
-    `,
-      [studentId]
+      `,
+      [syId, studentId]
     )
     const student = studentRows[0]
-    if (!student) return res.status(404).json({ message: 'Student not found' })
+    if (!student) return res.status(404).json({ message: 'Student (enrollment) not found for this school year' })
 
-    // --- Permission: if teacher, must be assigned to the student's section ---
+    // ---- Permission: teacher must be assigned to this section in this SY ----
     if (isTeacher) {
-      const [ownRows] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-        teacherId,
-        student.section_id
-      ])
+      const [ownRows] = await db.query(
+        `SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? AND school_year_id = ? LIMIT 1`,
+        [teacherId, student.section_id, syId]
+      )
       if (!ownRows.length) return res.status(403).json({ message: 'Not allowed to generate form for this student' })
     }
 
-    // --- Parents ---
+    // ---- Parents (distinct, not deleted) ----
     const [parentRows] = await db.query(
       `
-      SELECT p.first_name, p.last_name
+      SELECT DISTINCT p.first_name, p.last_name
       FROM student_parents sp
-      JOIN parents p ON p.id = sp.parent_id
+      JOIN parents p ON p.id = sp.parent_id AND p.is_deleted = 0
       WHERE sp.student_id = ?
-    `,
+      `,
       [studentId]
     )
     const parentNames = parentRows.map(p => `${p.last_name}, ${p.first_name}`)
 
-    // --- Determine date range from schoolYear (optional) ---
-    let dateClause = ''
-    const params = []
-    if (isTeacher) {
-      // if teacher, we will bind teacherId then section_id
-      params.push(teacherId, student.section_id)
-    } else {
-      // admin: only section_id required
-      params.push(student.section_id)
-    }
-
-    if (schoolYear) {
-      const parts = schoolYear.split('-').map(p => Number(p))
-      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-        const start = `${parts[0]}-06-01`
-        const end = `${parts[1]}-05-31`
-        dateClause = ' AND a.activity_date BETWEEN ? AND ? '
-        params.push(start, end)
-      }
-    } else {
-      // default to current calendar year
-      dateClause = ' AND YEAR(a.activity_date) = YEAR(CURDATE()) '
-    }
-
-    // --- Activities assigned to this section ---
-    // If teacher: only activities created by that teacher (original behavior).
-    // If admin: include activities by any creator (so remove created_by filter).
-    let activitiesQuery = ''
-    if (isTeacher) {
-      activitiesQuery = `
-        SELECT DISTINCT a.id AS activity_id, a.title, a.activity_date, aa.id AS activity_assignment_id
-        FROM activities a
-        JOIN activity_assignments aa ON aa.activity_id = a.id
-        WHERE a.created_by = ?
-          AND aa.section_id = ?
-          AND a.is_deleted = 0
-          ${dateClause}
-        ORDER BY a.activity_date DESC
+    // ---- Activities assigned to the student's section for this school year ----
+    // Include admin "general" ones—no created_by restriction
+    const [actRows] = await db.query(
       `
-    } else {
-      // admin: don't restrict by created_by
-      activitiesQuery = `
-        SELECT DISTINCT a.id AS activity_id, a.title, a.activity_date, aa.id AS activity_assignment_id
-        FROM activities a
-        JOIN activity_assignments aa ON aa.activity_id = a.id
-        WHERE aa.section_id = ?
-          AND a.is_deleted = 0
-          ${dateClause}
-        ORDER BY a.activity_date DESC
-      `
-    }
+      SELECT DISTINCT
+        a.id AS activity_id,
+        a.title,
+        a.activity_date,
+        aa.id AS activity_assignment_id
+      FROM activities a
+      JOIN activity_assignments aa
+        ON aa.activity_id = a.id
+      WHERE aa.section_id = ?
+        AND a.school_year_id = ?
+        AND a.is_deleted = 0
+      ORDER BY a.activity_date DESC, a.id DESC
+      `,
+      [student.section_id, syId]
+    )
 
-    const [actRows] = await db.query(activitiesQuery, params)
-
-    // --- Group activities by date (YYYY-MM-DD) preserving descending order ---
+    // ---- Group activities by date (YYYY-MM-DD) ----
     const groups = []
     for (const r of actRows) {
       const dateKey = r.activity_date ? new Date(r.activity_date).toISOString().slice(0, 10) : 'No date'
@@ -137,7 +119,7 @@ export default async function handler(req, res) {
       })
     }
 
-    // --- PDF setup: logos + tunables ---
+    // ---- PDF Setup ----
     const publicDir = path.join(process.cwd(), 'public')
     const logoLeftRel = process.env.LOGO_LEFT || 'logos/left.png'
     const logoRightRel = process.env.LOGO_RIGHT || 'logos/right.png'
@@ -158,27 +140,23 @@ export default async function handler(req, res) {
 
     const filename = `SPTA_Checklist_${student.last_name}_${student.first_name}_${student.grade_name}_${
       student.section_name
-    }${schoolYear ? `_${schoolYear}` : ''}.pdf`
+    }${schoolYearName ? `_${schoolYearName}` : ''}.pdf`
 
-    // Set appropriate headers based on whether this is a preview or download
     res.setHeader('Content-Type', 'application/pdf')
-    if (isPreview) {
-      // For preview, set inline disposition so PDF opens in browser
-      res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/\s+/g, '_')}"`)
-    } else {
-      // For download, set attachment disposition
-      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\s+/g, '_')}"`)
-    }
+    res.setHeader(
+      'Content-Disposition',
+      `${isPreview ? 'inline' : 'attachment'}; filename="${filename.replace(/\s+/g, '_')}"`
+    )
 
     const doc = new PDFDocument({ size: 'A4', margin: 36 })
     doc.pipe(res)
 
-    // --- HEADER LAYOUT (logos vertically centered with text block) ---
     const pageWidth = doc.page.width
     const left = doc.page.margins.left
     const right = pageWidth - doc.page.margins.right
     const contentWidth = right - left
 
+    // ---- Header (with logos) ----
     const headerLines = [
       { text: schoolDepEd, font: 'Helvetica-Bold', size: 11 },
       { text: schoolDepEdSub, font: 'Helvetica', size: 10 },
@@ -192,8 +170,7 @@ export default async function handler(req, res) {
     let totalHeaderTextHeight = 0
     for (const ln of headerLines) {
       doc.font(ln.font).fontSize(ln.size)
-      const h = doc.heightOfString(ln.text, { width: contentWidth, align: 'center' })
-      totalHeaderTextHeight += h + lineGap
+      totalHeaderTextHeight += doc.heightOfString(ln.text, { width: contentWidth, align: 'center' }) + lineGap
     }
     totalHeaderTextHeight -= lineGap
     const headerStartY = doc.y
@@ -204,16 +181,12 @@ export default async function handler(req, res) {
     if (leftLogoExists) {
       try {
         doc.image(logoLeftPath, left, logoTopY, { width: logoWidth, height: logoHeight })
-      } catch (e) {
-        console.warn('Left logo load failed', e)
-      }
+      } catch {}
     }
     if (rightLogoExists) {
       try {
         doc.image(logoRightPath, right - logoWidth, logoTopY, { width: logoWidth, height: logoHeight })
-      } catch (e) {
-        console.warn('Right logo load failed', e)
-      }
+      } catch {}
     }
 
     let yCursor = headerStartY
@@ -234,10 +207,9 @@ export default async function handler(req, res) {
       }
       yCursor += h + lineGap
     }
-
     doc.y = Math.max(yCursor, logoTopY + logosHeight) + 8
 
-    // --- Info lines with underlined text values ---
+    // ---- Info block ----
     const labelColWidth = 190
     const valueColStartX = left + labelColWidth + 8
     const underlineRight = right
@@ -247,23 +219,20 @@ export default async function handler(req, res) {
       { label: 'Name of Parent/ Guardian:', value: parentNames.join(', ') || '________________________' },
       { label: 'Name of Pupils Enrolled:', value: `${student.last_name}, ${student.first_name}` },
       { label: 'Grade and Section:', value: `${student.grade_name} - ${student.section_name}` },
-      { label: 'School Year:', value: schoolYear || '________________' }
+      { label: 'School Year:', value: schoolYearName || (await nameForSy(db, syId)) || '________________' }
     ]
 
     for (const row of infoRows) {
       const yBefore = doc.y
       doc.text(row.label, left, yBefore, { width: labelColWidth - 8, align: 'left' })
       doc.font('Helvetica').fontSize(10)
-      doc.text(row.value, valueColStartX, yBefore, {
-        width: underlineRight - valueColStartX,
-        underline: true
-      })
+      doc.text(row.value, valueColStartX, yBefore, { width: underlineRight - valueColStartX, underline: true })
       doc.moveDown(0.6)
     }
 
     doc.moveDown(0.4)
 
-    // --- Activity table header and body (SIGNATURE column) ---
+    // ---- Activity table (ACTIVITY / DATE / SIGNATURE) ----
     const tableLeft = left
     const tableWidth = right - tableLeft
     const colActivity = Math.round(tableWidth * 0.5)
@@ -272,6 +241,7 @@ export default async function handler(req, res) {
     const rowHeight = 25
     let y = doc.y + 6
 
+    // header
     doc.rect(tableLeft, y, tableWidth, rowHeight).stroke()
     doc
       .moveTo(tableLeft + colActivity, y)
@@ -296,6 +266,7 @@ export default async function handler(req, res) {
     doc.font('Helvetica').fontSize(10)
 
     if (!groups.length) {
+      // draw blank lines
       const blankRows = 8
       for (let i = 0; i < blankRows; i++) {
         if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 60) {
@@ -344,6 +315,7 @@ export default async function handler(req, res) {
       }
     }
 
+    // ---- Footer signature lines ----
     if (y + 80 > doc.page.height - doc.page.margins.bottom) {
       doc.addPage()
       y = doc.y + 6
@@ -372,5 +344,15 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error('parent-checklist error', err)
     if (!res.headersSent) return res.status(500).json({ message: 'Internal server error' })
+  }
+}
+
+async function nameForSy(db, syId) {
+  try {
+    const [r] = await db.query(`SELECT name FROM school_years WHERE id = ? LIMIT 1`, [syId])
+
+    return r[0]?.name || null
+  } catch {
+    return null
   }
 }

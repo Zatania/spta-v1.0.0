@@ -95,7 +95,12 @@ export default function TeacherDashboard() {
         present_count: a.present_count,
         absent_count: a.absent_count,
         paid_count: a.paid_count,
-        unpaid_count: a.unpaid_count
+        unpaid_count: a.unpaid_count,
+
+        // include contribution fields from the API
+        contrib_students: a.contrib_students,
+        contrib_hours_total: a.contrib_hours_total,
+        contrib_estimated_total: a.contrib_estimated_total
       }))
       setRows(activities)
     } catch (err) {

@@ -88,6 +88,10 @@ const Dashboard = () => {
   const [parentLoading, setParentLoading] = useState(false)
   const [parentPupils, setParentPupils] = useState({}) // { parentId: [students...] }
 
+  const [schoolYears, setSchoolYears] = useState([])
+  const [schoolYearId, setSchoolYearId] = useState(null)
+  const [loadingSY, setLoadingSY] = useState(false)
+
   // Navigation state
   const [currentView, setCurrentView] = useState(VIEW_TYPES.OVERVIEW)
   const [selectedGrade, setSelectedGrade] = useState(null)
@@ -161,6 +165,11 @@ const Dashboard = () => {
 
   const parentIdsParam = () => (parentFilter && parentFilter.length ? parentFilter.map(p => p.id).join(',') : undefined)
 
+  const selectedSchoolYear = useMemo(
+    () => schoolYears.find(sy => sy.id === schoolYearId) || null,
+    [schoolYears, schoolYearId]
+  )
+
   const fetchOverview = async () => {
     setLoadingOverview(true)
     setErrorOverview(null)
@@ -169,7 +178,8 @@ const Dashboard = () => {
         params: {
           view: 'overview',
           from_date: fromDate || undefined,
-          to_date: toDate || undefined
+          to_date: toDate || undefined,
+          school_year_id: schoolYearId || undefined
         }
       })
       setOverview(res.data)
@@ -186,7 +196,8 @@ const Dashboard = () => {
     try {
       const res = await axios.get('/api/summary', {
         params: {
-          view: 'byGrade'
+          view: 'byGrade',
+          school_year_id: schoolYearId || undefined
         }
       })
       setByGrade(res.data.grades ?? [])
@@ -211,7 +222,8 @@ const Dashboard = () => {
       const res = await axios.get('/api/summary', {
         params: {
           view: 'byGrade',
-          grade_id: gradeId
+          grade_id: gradeId,
+          school_year_id: schoolYearId || undefined
         }
       })
       const gradeData = res.data.grades?.[0]
@@ -232,7 +244,8 @@ const Dashboard = () => {
         params: {
           section_id: sectionId,
           from_date: fromDate || undefined,
-          to_date: toDate || undefined
+          to_date: toDate || undefined,
+          school_year_id: schoolYearId || undefined
         }
       })
       setSectionActivities(res.data.activities ?? [])
@@ -260,7 +273,9 @@ const Dashboard = () => {
           section_id: sectionId,
           page,
           page_size: pageSize,
-          search
+          search,
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
       setActivityStudents(res.data.students ?? [])
@@ -283,7 +298,8 @@ const Dashboard = () => {
           view: 'paymentsByGrade',
           from_date: fromDate || undefined,
           to_date: toDate || undefined,
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
 
@@ -308,7 +324,8 @@ const Dashboard = () => {
           grade_id: gradeId,
           from_date: fromDate || undefined,
           to_date: toDate || undefined,
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
 
@@ -330,7 +347,8 @@ const Dashboard = () => {
           view: 'activitiesOverview',
           from_date: fromDate || undefined,
           to_date: toDate || undefined,
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
       setActivitiesOverviewData(res.data.activities_by_grade ?? [])
@@ -353,7 +371,8 @@ const Dashboard = () => {
           grade_id: gradeId,
           from_date: fromDate || undefined,
           to_date: toDate || undefined,
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
       setActivitiesByGrade(res.data.activities_by_section ?? [])
@@ -376,7 +395,8 @@ const Dashboard = () => {
           section_id: sectionId,
           from_date: fromDate || undefined,
           to_date: toDate || undefined,
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
       setActivitiesSectionActivities(res.data.section_activities ?? [])
@@ -399,7 +419,8 @@ const Dashboard = () => {
           section_id: sectionId,
           page: 1,
           page_size: 1000,
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
       setActivitiesStudents(res.data.students ?? [])
@@ -414,7 +435,7 @@ const Dashboard = () => {
   const fetchParents = async (q = '') => {
     setParentLoading(true)
     try {
-      const res = await axios.get('/api/parents', { params: { q } })
+      const res = await axios.get('/api/parents', { params: { search: q } })
       setParentOptions(res.data.parents ?? [])
     } catch (e) {
       console.error('Failed to fetch parents', e)
@@ -431,7 +452,10 @@ const Dashboard = () => {
     }
     try {
       const ids = parents.map(p => p.id).join(',')
-      const res = await axios.get('/api/parents/pupils', { params: { parent_ids: ids } })
+
+      const res = await axios.get('/api/parents/pupils', {
+        params: { parent_ids: ids, school_year_id: schoolYearId || undefined }
+      })
 
       // expected res.data: { parent_id: [{student}, ...], ... }
       setParentPupils(res.data || {})
@@ -608,17 +632,17 @@ const Dashboard = () => {
         return
       }
 
-      const sy = inferSchoolYear()
+      const activityPart = activitiesSelectedActivity?.id
+        ? `&activity_id=${encodeURIComponent(activitiesSelectedActivity.id)}`
+        : ''
 
-      // include activity_id only when present; admin downloads will omit it
-      const activityPart =
-        activitiesSelectedActivity && activitiesSelectedActivity.id
-          ? `&activity_id=${encodeURIComponent(activitiesSelectedActivity.id)}`
-          : ''
+      // Prefer the new school_year_id. Also send legacy school_year=name for backward compat.
+      const legacyName = selectedSchoolYear?.name || ''
 
-      const url = `/api/teacher/forms/parent-checklist?student_id=${encodeURIComponent(
-        studentId
-      )}&school_year=${encodeURIComponent(sy)}${activityPart}`
+      const url =
+        `/api/teacher/forms/parent-checklist?student_id=${encodeURIComponent(studentId)}${activityPart}` +
+        `&school_year_id=${encodeURIComponent(schoolYearId ?? '')}` +
+        (legacyName ? `&school_year=${encodeURIComponent(legacyName)}` : '')
 
       console.log('Requesting PDF from:', url)
       const resp = await fetch(url, { method: 'GET' })
@@ -722,7 +746,7 @@ const Dashboard = () => {
     fetchOverview()
     fetchByGrade()
     fetchActivitiesOverview()
-  }, [fromDate, toDate, parentFilter])
+  }, [fromDate, toDate, parentFilter, schoolYearId])
 
   // load parent options on mount (or you can lazy-load via Autocomplete's onInputChange)
   useEffect(() => {
@@ -732,7 +756,7 @@ const Dashboard = () => {
   // fetch pupils whenever parentFilter changes
   useEffect(() => {
     fetchPupilsForParents(parentFilter)
-  }, [parentFilter])
+  }, [parentFilter, schoolYearId])
 
   // when gradeSections are loaded for a selected grade, scroll to the sections area
   useEffect(() => {
@@ -802,7 +826,12 @@ const Dashboard = () => {
           <CardContent>
             <Box display='flex' justifyContent='space-between' alignItems='center' sx={{ mb: 2 }}>
               <Box>
-                <Typography variant='h6'>Payments Overview</Typography>
+                <Typography variant='h6'>
+                  Payments Overview
+                  {selectedSchoolYear && (
+                    <Chip component='span' label={selectedSchoolYear.name} size='small' sx={{ ml: 1 }} />
+                  )}
+                </Typography>
                 <Typography variant='body2' color='text.secondary'>
                   Click the chart to drill-down by grade, then by section.
                 </Typography>
@@ -874,13 +903,13 @@ const Dashboard = () => {
                     const pieData =
                       total > 0
                         ? [
-                            { name: 'Paid', value: paid },
-                            { name: 'Unpaid', value: unpaid }
+                            { name: 'Paid', value: paid, fill: paymentColors.Paid },
+                            { name: 'Unpaid', value: unpaid, fill: paymentColors.Unpaid }
                           ]
                         : [{ name: 'No data', value: 1 }]
 
                     // colors for slices; use neutral color for "No data"
-                    const sliceColors = total > 0 ? pieData.map(d => paymentColors[d.name] || '#CCCCCC') : ['#CCCCCC']
+                    //const sliceColors = total > 0 ? pieData.map(d => paymentColors[d.name] || '#CCCCCC') : ['#CCCCCC']
 
                     return (
                       <>
@@ -900,10 +929,20 @@ const Dashboard = () => {
                                 label
                               >
                                 {pieData.map((entry, index) => (
-                                  <Cell key={`cell-${index}`} fill={sliceColors[index % sliceColors.length]} />
+                                  <Cell key={`cell-${index}`} fill={entry.fill} />
                                 ))}
                               </Pie>
-                              <Legend />
+
+                              <Legend
+                                payload={
+                                  total > 0
+                                    ? [
+                                        { value: 'Paid', type: 'square', color: paymentColors.Paid },
+                                        { value: 'Unpaid', type: 'square', color: paymentColors.Unpaid }
+                                      ]
+                                    : [{ value: 'No data', type: 'square', color: '#CCCCCC' }]
+                                }
+                              />
                               <Tooltip />
                             </PieChart>
                           </ResponsiveContainer>
@@ -953,6 +992,7 @@ const Dashboard = () => {
                           <Bar
                             dataKey='paid_count'
                             name='Paid'
+                            fill={paymentColors.Paid}
                             onClick={data => handlePaymentsGradeClick(data.payload)}
                             style={{ cursor: 'pointer' }}
                           >
@@ -960,7 +1000,7 @@ const Dashboard = () => {
                               <Cell key={`paid-${i}`} fill={paymentColors['Paid']} />
                             ))}
                           </Bar>
-                          <Bar dataKey='unpaid_count' name='Unpaid'>
+                          <Bar dataKey='unpaid_count' name='Unpaid' fill={paymentColors.Unpaid}>
                             {paymentsByGrade.map((g, i) => (
                               <Cell key={`unpaid-${i}`} fill={paymentColors['Unpaid']} />
                             ))}
@@ -1022,12 +1062,12 @@ const Dashboard = () => {
                           <YAxis allowDecimals={false} />
                           <Tooltip />
                           <Legend />
-                          <Bar dataKey='paid_count' name='Paid'>
+                          <Bar dataKey='paid_count' name='Paid' fill={paymentColors.Paid}>
                             {paymentsBySection.map((s, i) => (
                               <Cell key={`psec-${i}`} fill={paymentColors['Paid']} />
                             ))}
                           </Bar>
-                          <Bar dataKey='unpaid_count' name='Unpaid'>
+                          <Bar dataKey='unpaid_count' name='Unpaid' fill={paymentColors.Unpaid}>
                             {paymentsBySection.map((s, i) => (
                               <Cell key={`usec-${i}`} fill={paymentColors['Unpaid']} />
                             ))}
@@ -1080,7 +1120,12 @@ const Dashboard = () => {
           <CardContent>
             <Box display='flex' justifyContent='space-between' alignItems='center' sx={{ mb: 2 }}>
               <Box>
-                <Typography variant='h6'>Activities Attendance Overview</Typography>
+                <Typography variant='h6'>
+                  Activities Attendance Overview
+                  {selectedSchoolYear && (
+                    <Chip component='span' label={selectedSchoolYear.name} size='small' sx={{ ml: 1 }} />
+                  )}
+                </Typography>
                 <Typography variant='body2' color='text.secondary'>
                   Click the chart to drill-down by grade, then by section, then by activity.
                 </Typography>
@@ -1386,44 +1431,99 @@ const Dashboard = () => {
                                       <TableCell>Section</TableCell>
                                       <TableCell align='center'>Parent Present</TableCell>
                                       <TableCell align='center'>Student Present</TableCell>
-                                      <TableCell align='right'>Payment</TableCell>
+
+                                      {/* ⬇️ rename + add a new column */}
+                                      <TableCell align='center'>Payment Status</TableCell>
+                                      <TableCell align='right'>Amount Paid</TableCell>
                                       <TableCell>Payment Date</TableCell>
                                     </TableRow>
                                   </TableHead>
+
                                   <TableBody>
-                                    {activitiesStudents.map(student => (
-                                      <TableRow key={student.id} hover>
-                                        <TableCell>{student.lrn}</TableCell>
-                                        <TableCell>
-                                          {student.last_name}, {student.first_name}
-                                        </TableCell>
-                                        <TableCell>{student.parents || '—'}</TableCell>
-                                        <TableCell>{student.grade_name}</TableCell>
-                                        <TableCell>{student.section_name}</TableCell>
-                                        <TableCell align='center'>
-                                          <Chip
-                                            label={student.parent_present ? 'Yes' : 'No'}
-                                            color={student.parent_present ? 'success' : 'default'}
-                                            size='small'
-                                          />
-                                        </TableCell>
-                                        <TableCell align='center'>
-                                          <Chip
-                                            label={student.attendance_status === 'present' ? 'Yes' : 'No'}
-                                            color={student.attendance_status === 'present' ? 'success' : 'error'}
-                                            size='small'
-                                          />
-                                        </TableCell>
-                                        <TableCell align='right'>
-                                          {student.payment_amount ? `₱${student.payment_amount}` : '—'}
-                                        </TableCell>
-                                        <TableCell>
-                                          {student.payment_date
-                                            ? new Date(student.payment_date).toLocaleDateString()
-                                            : '—'}
-                                        </TableCell>
-                                      </TableRow>
-                                    ))}
+                                    {activitiesStudents.map((student, i) => {
+                                      const isFullyPaid =
+                                        typeof student.is_fully_paid === 'number'
+                                          ? student.is_fully_paid
+                                          : student.payment_paid === 1
+                                          ? 1
+                                          : student.payment_paid === 0
+                                          ? 0
+                                          : null
+
+                                      const paidAmount =
+                                        student.paid_amount != null
+                                          ? Number(student.paid_amount)
+                                          : student.payment_amount != null
+                                          ? Number(student.payment_amount)
+                                          : null
+
+                                      const latestPaymentDate =
+                                        student.latest_payment_date || student.payment_date || null
+                                      const contribEntries = Number(student.contrib_entries || 0)
+
+                                      const unpaidButContrib =
+                                        (isFullyPaid === 0 || isFullyPaid === null) && contribEntries > 0
+
+                                      const paymentStatusChip =
+                                        isFullyPaid === 1 ? (
+                                          <Chip label='Paid' color='success' size='small' />
+                                        ) : unpaidButContrib ? (
+                                          <Chip label='N/A (Contrib)' color='default' size='small' />
+                                        ) : (
+                                          <Chip label='Unpaid' color='warning' size='small' />
+                                        )
+
+                                      const amountDisplay =
+                                        isFullyPaid === 1
+                                          ? paidAmount != null
+                                            ? `₱${paidAmount.toFixed(2)}`
+                                            : '₱0.00'
+                                          : unpaidButContrib
+                                          ? 'N/A'
+                                          : '—'
+
+                                      const dateDisplay =
+                                        isFullyPaid === 1
+                                          ? latestPaymentDate
+                                            ? new Date(latestPaymentDate).toLocaleDateString()
+                                            : '—'
+                                          : unpaidButContrib
+                                          ? 'N/A'
+                                          : '—'
+
+                                      const studentPresent = student.attendance_status === 'present'
+
+                                      return (
+                                        <TableRow key={student.id || i} hover>
+                                          <TableCell>{student.lrn}</TableCell>
+                                          <TableCell>
+                                            {student.last_name}, {student.first_name}
+                                          </TableCell>
+                                          <TableCell>{student.parents || '—'}</TableCell>
+                                          <TableCell>{student.grade_name}</TableCell>
+                                          <TableCell>{student.section_name}</TableCell>
+                                          <TableCell align='center'>
+                                            <Chip
+                                              label={student.parent_present ? 'Yes' : 'No'}
+                                              color={student.parent_present ? 'success' : 'default'}
+                                              size='small'
+                                            />
+                                          </TableCell>
+                                          <TableCell align='center'>
+                                            <Chip
+                                              label={studentPresent ? 'Yes' : 'No'}
+                                              color={studentPresent ? 'success' : 'error'}
+                                              size='small'
+                                            />
+                                          </TableCell>
+
+                                          {/* NEW/ADJUSTED payment cells */}
+                                          <TableCell align='center'>{paymentStatusChip}</TableCell>
+                                          <TableCell align='right'>{amountDisplay}</TableCell>
+                                          <TableCell>{dateDisplay}</TableCell>
+                                        </TableRow>
+                                      )
+                                    })}
                                   </TableBody>
                                 </Table>
                               </Box>
@@ -1514,7 +1614,12 @@ const Dashboard = () => {
           <Card>
             <CardContent>
               <Box display='flex' justifyContent='space-between' alignItems='center' sx={{ mb: 2 }}>
-                <Typography variant='h6'>Students by Grade</Typography>
+                <Typography variant='h6'>
+                  Students by Grade
+                  {selectedSchoolYear && (
+                    <Chip component='span' label={selectedSchoolYear.name} size='small' sx={{ ml: 1 }} />
+                  )}
+                </Typography>
               </Box>
 
               {loadingGrades ? (
@@ -1857,64 +1962,117 @@ const Dashboard = () => {
                     <TableCell>Parents/Guardians</TableCell>
                     <TableCell align='center'>Attendance</TableCell>
                     <TableCell align='center'>Parent Present</TableCell>
-                    <TableCell align='center'>Payment</TableCell>
+
+                    {/* ⬇️ rename + add a new column */}
+                    <TableCell align='center'>Payment Status</TableCell>
+                    <TableCell align='right'>Amount Paid</TableCell>
                     <TableCell>Payment Date</TableCell>
+
                     <TableCell align='center'>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {activityStudents.map((student, i) => (
-                    <TableRow key={`student-${i}`}>
-                      <TableCell>{student.lrn}</TableCell>
-                      <TableCell>
-                        {student.last_name}, {student.first_name}
-                      </TableCell>
-                      <TableCell>{student.parents || '—'}</TableCell>
-                      <TableCell align='center'>
-                        {student.attendance_status ? (
+                  {activityStudents.map((student, i) => {
+                    // ----- derived fields (works with old/new API) -----
+                    // Prefer new fields (from Part B API): is_fully_paid, paid_amount, latest_payment_date, contrib_entries.
+                    // Fallback to existing ones if needed.
+                    const isFullyPaid =
+                      typeof student.is_fully_paid === 'number'
+                        ? student.is_fully_paid
+                        : student.payment_paid === 1
+                        ? 1
+                        : student.payment_paid === 0
+                        ? 0
+                        : null
+
+                    const paidAmount =
+                      student.paid_amount != null
+                        ? Number(student.paid_amount)
+                        : student.payment_amount != null
+                        ? Number(student.payment_amount)
+                        : null
+
+                    const latestPaymentDate = student.latest_payment_date || student.payment_date || null
+
+                    const contribEntries = Number(student.contrib_entries || 0)
+
+                    // rule: if UNPAID but has contributions -> show N/A for Amount + Date and a neutral status chip
+                    const unpaidButContrib = (isFullyPaid === 0 || isFullyPaid === null) && contribEntries > 0
+
+                    const paymentStatusChip =
+                      isFullyPaid === 1 ? (
+                        <Chip label='Paid' color='success' size='small' />
+                      ) : unpaidButContrib ? (
+                        <Chip label='N/A (Contrib)' color='default' size='small' />
+                      ) : (
+                        <Chip label='Unpaid' color='warning' size='small' />
+                      )
+
+                    const amountDisplay =
+                      isFullyPaid === 1
+                        ? paidAmount != null
+                          ? `₱${paidAmount.toFixed(2)}`
+                          : '₱0.00'
+                        : unpaidButContrib
+                        ? 'N/A'
+                        : '—'
+
+                    const dateDisplay =
+                      isFullyPaid === 1
+                        ? latestPaymentDate
+                          ? new Date(latestPaymentDate).toLocaleDateString()
+                          : '—'
+                        : unpaidButContrib
+                        ? 'N/A'
+                        : '—'
+
+                    return (
+                      <TableRow key={`student-${i}`}>
+                        <TableCell>{student.lrn}</TableCell>
+                        <TableCell>
+                          {student.last_name}, {student.first_name}
+                        </TableCell>
+                        <TableCell>{student.parents || '—'}</TableCell>
+                        <TableCell align='center'>
+                          {student.attendance_status ? (
+                            <Chip
+                              label={student.attendance_status}
+                              color={student.attendance_status === 'present' ? 'success' : 'error'}
+                              size='small'
+                            />
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                        <TableCell align='center'>
                           <Chip
-                            label={student.attendance_status}
-                            color={student.attendance_status === 'present' ? 'success' : 'error'}
+                            label={student.parent_present ? 'Present' : 'Absent'}
+                            color={student.parent_present ? 'success' : 'default'}
                             size='small'
                           />
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell align='center'>
-                        <Chip
-                          label={student.parent_present ? 'Present' : 'Absent'}
-                          color={student.parent_present ? 'success' : 'default'}
-                          size='small'
-                        />
-                      </TableCell>
-                      <TableCell align='center'>
-                        {student.payment_paid === 1 ? (
-                          <Chip label='Paid' color='success' size='small' />
-                        ) : student.payment_paid === 0 ? (
-                          <Chip label='Unpaid' color='warning' size='small' />
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {student.payment_date ? new Date(student.payment_date).toLocaleDateString() : '—'}
-                      </TableCell>
-                      <TableCell align='center'>
-                        <Stack direction='row' spacing={1}>
-                          <Button
-                            size='small'
-                            startIcon={<VisibilityIcon />}
-                            onClick={() => handlePreviewForm(student)}
-                            variant='outlined'
-                            color='primary'
-                          >
-                            Preview
-                          </Button>
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+
+                        {/* NEW/ADJUSTED payment cells */}
+                        <TableCell align='center'>{paymentStatusChip}</TableCell>
+                        <TableCell align='right'>{amountDisplay}</TableCell>
+                        <TableCell>{dateDisplay}</TableCell>
+
+                        <TableCell align='center'>
+                          <Stack direction='row' spacing={1}>
+                            <Button
+                              size='small'
+                              startIcon={<VisibilityIcon />}
+                              onClick={() => handlePreviewForm(student)}
+                              variant='outlined'
+                              color='primary'
+                            >
+                              Preview
+                            </Button>
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </Box>
@@ -1944,12 +2102,13 @@ const Dashboard = () => {
     setPdfLoading(true)
     setPdfPreviewOpen(true)
 
-    const sy = inferSchoolYear()
+    const legacyName = selectedSchoolYear?.name || ''
 
-    const url = `/api/teacher/forms/parent-checklist?student_id=${student.student_id}&school_year=${encodeURIComponent(
-      sy
-    )}&preview=true`
-    setPreviewEndpoint(url)
+    const url =
+      `/api/teacher/forms/parent-checklist?student_id=${student.student_id}` +
+      `&school_year_id=${encodeURIComponent(schoolYearId ?? '')}` +
+      (legacyName ? `&school_year=${encodeURIComponent(legacyName)}` : '') +
+      `&preview=true`
 
     try {
       const resp = await axios.get(url, { responseType: 'blob', withCredentials: true })
@@ -2115,6 +2274,24 @@ const Dashboard = () => {
     </Dialog>
   )
 
+  useEffect(() => {
+    const run = async () => {
+      setLoadingSY(true)
+      try {
+        const { data } = await axios.get('/api/school-years')
+        const list = data.school_years || []
+        setSchoolYears(list)
+        const current = list.find(sy => sy.is_current === 1) || list[0]
+        setSchoolYearId(current?.id ?? null)
+      } catch (e) {
+        console.error('Failed to load school years', e)
+      } finally {
+        setLoadingSY(false)
+      }
+    }
+    run()
+  }, [])
+
   const renderTopFilters = () => (
     <Stack direction='row' spacing={2} alignItems='center' justifyContent='space-between' sx={{ mb: 2 }}>
       <Box display='flex' gap={2} alignItems='center'>
@@ -2133,6 +2310,17 @@ const Dashboard = () => {
           value={toDate}
           onChange={e => setToDate(e.target.value)}
           InputLabelProps={{ shrink: true }}
+        />
+
+        <Autocomplete
+          size='small'
+          sx={{ minWidth: 220 }}
+          options={schoolYears}
+          getOptionLabel={o => o.name}
+          value={schoolYears.find(sy => sy.id === schoolYearId) || null}
+          onChange={(_e, val) => setSchoolYearId(val?.id ?? null)}
+          loading={loadingSY}
+          renderInput={params => <TextField {...params} label='School Year' placeholder='Select school year' />}
         />
 
         <Autocomplete
@@ -2322,14 +2510,6 @@ const Dashboard = () => {
       {renderPdfPreviewDialog()}
     </Grid>
   )
-}
-
-function inferSchoolYear(date = new Date()) {
-  const y = date.getFullYear()
-  const m = date.getMonth() + 1
-  if (m >= 6) return `${y}-${y + 1}`
-
-  return `${y - 1}-${y}`
 }
 
 Dashboard.acl = { action: 'read', subject: 'dashboard' }

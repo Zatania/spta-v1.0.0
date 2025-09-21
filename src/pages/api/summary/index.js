@@ -33,7 +33,8 @@ export default async function handler(req, res) {
     section_id = null,
     activity_id = null,
     from_date = null,
-    to_date = null
+    to_date = null,
+    school_year_id = null
   } = req.query
 
   // Date filters
@@ -56,17 +57,18 @@ export default async function handler(req, res) {
   const dateWhereNoAlias = dateFiltersNoAlias.length ? `AND ${dateFiltersNoAlias.join(' AND ')}` : ''
 
   try {
-    const currentSyId = await getCurrentSchoolYearId()
+    let syId = parseInt(school_year_id, 10)
+    if (!Number.isFinite(syId)) syId = await getCurrentSchoolYearId()
 
     // ---------- OVERVIEW ----------
     if (view === 'overview') {
       // total students = active enrollments in current SY
       const [[studentsRow]] = await db.query(
         `SELECT COUNT(DISTINCT en.student_id) AS total_students
-         FROM student_enrollments en
-         JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
-         WHERE en.school_year_id = ? AND en.status = 'active'`,
-        [currentSyId]
+        FROM student_enrollments en
+        JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
+        WHERE en.school_year_id = ? AND en.status = 'active'`,
+        [syId]
       )
 
       // activities count (current SY + optional date range)
@@ -76,7 +78,7 @@ export default async function handler(req, res) {
          WHERE is_deleted = 0
            AND school_year_id = ?
            ${dateWhereNoAlias}`,
-        [currentSyId, ...dateParams]
+        [syId, ...dateParams]
       )
 
       // attendance totals limited to current SY activities
@@ -95,7 +97,7 @@ export default async function handler(req, res) {
           AND a.school_year_id = ?
           ${dateWhereA};
         `,
-        [currentSyId, ...dateParams]
+        [syId, ...dateParams]
       )
 
       // payments totals limited to current SY activities
@@ -112,7 +114,7 @@ export default async function handler(req, res) {
           AND a.school_year_id = ?
           ${dateWhereA};
         `,
-        [currentSyId, ...dateParams]
+        [syId, ...dateParams]
       )
 
       return res.status(200).json({
@@ -131,7 +133,9 @@ export default async function handler(req, res) {
     // ---------- BY GRADE ----------
     if (view === 'byGrade') {
       const filter = grade_id ? 'WHERE g.id = ?' : ''
-      const params = grade_id ? [grade_id, currentSyId] : [currentSyId]
+
+      // First ? is for en.school_year_id, second ? (optional) is for g.id
+      const params = grade_id ? [syId, grade_id] : [syId]
 
       // Count students per section via current SY enrollments
       const [rows] = await db.query(
@@ -181,7 +185,7 @@ export default async function handler(req, res) {
         SELECT DISTINCT
           a.id AS activity_id,
           a.title,
-          a.activity_date
+          DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date
         FROM activities a
         JOIN activity_assignments aa ON aa.activity_id = a.id
         WHERE aa.section_id = ?
@@ -190,7 +194,7 @@ export default async function handler(req, res) {
           ${dateWhereA}
         ORDER BY a.activity_date DESC
         `,
-        [section_id, currentSyId, ...dateParams]
+        [section_id, syId, ...dateParams]
       )
 
       const activitySummaries = []
@@ -243,7 +247,7 @@ export default async function handler(req, res) {
         JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
         WHERE en.section_id = ? AND en.school_year_id = ? AND en.status = 'active'
         `,
-        [section_id, currentSyId]
+        [section_id, syId]
       )
 
       return res.status(200).json({
@@ -262,7 +266,7 @@ export default async function handler(req, res) {
       // optional: ensure activity belongs to current SY
       const [[actCheck]] = await db.query(
         `SELECT id FROM activities WHERE id = ? AND is_deleted = 0 AND school_year_id = ? LIMIT 1`,
-        [activity_id, currentSyId]
+        [activity_id, syId]
       )
       if (!actCheck) return res.status(404).json({ message: 'Activity not found for current school year' })
 
@@ -317,7 +321,7 @@ export default async function handler(req, res) {
     if (view === 'paymentsByGrade') {
       const gradeFilter = grade_id ? 'AND aa.grade_id = ?' : ''
 
-      const params = grade_id ? [currentSyId, ...dateParams, grade_id] : [currentSyId, ...dateParams]
+      const params = grade_id ? [syId, ...dateParams, grade_id] : [syId, ...dateParams]
 
       const [rows] = await db.query(
         `
@@ -350,7 +354,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'grade_id is required for view=paymentsBySection' })
       }
 
-      const params = [currentSyId, ...dateParams, grade_id]
+      const params = [syId, ...dateParams, grade_id]
 
       const [rows] = await db.query(
         `
@@ -399,7 +403,7 @@ export default async function handler(req, res) {
         GROUP BY aa.grade_id, g.name
         ORDER BY aa.grade_id;
         `,
-        [currentSyId, ...dateParams]
+        [syId, ...dateParams]
       )
 
       return res.status(200).json({ activities_by_grade: rows ?? [] })
@@ -432,7 +436,7 @@ export default async function handler(req, res) {
         GROUP BY aa.section_id, s.name
         ORDER BY s.name;
         `,
-        [currentSyId, ...dateParams, grade_id]
+        [syId, ...dateParams, grade_id]
       )
 
       return res.status(200).json({ activities_by_section: rows ?? [] })
@@ -449,7 +453,7 @@ export default async function handler(req, res) {
           SELECT DISTINCT
             a.id,
             a.title,
-            a.activity_date
+            DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date
           FROM activities a
           JOIN activity_assignments aa ON aa.activity_id = a.id
           WHERE aa.section_id = ?
@@ -458,7 +462,7 @@ export default async function handler(req, res) {
             ${dateWhereA}
           ORDER BY a.activity_date DESC
           `,
-        [section_id, currentSyId, ...dateParams]
+        [section_id, syId, ...dateParams]
       )
 
       const activitySummaries = []

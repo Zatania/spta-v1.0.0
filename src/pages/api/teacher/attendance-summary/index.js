@@ -48,36 +48,48 @@ export default async function handler(req, res) {
           COALESCE(SUM(att.absent_count),0)    AS absent_count,
           COALESCE(SUM(pay.paid_count),0)      AS paid_count,
           COALESCE(SUM(pay.unpaid_count),0)    AS unpaid_count,
+          COALESCE(SUM(pay.paid_amount_total),0) AS paid_amount_total,
           COALESCE(SUM(contrib.contrib_students),0) AS contrib_students,
           COALESCE(SUM(contrib.total_hours),0)      AS contrib_hours_total,
           COALESCE(SUM(contrib.total_value),0)      AS contrib_estimated_total
       FROM activity_assignments aa
       -- ATTENDANCE (filtered via enrollments + optional parents)
       LEFT JOIN (
-          SELECT
-              at.activity_assignment_id,
-              SUM(at.parent_present = 1) AS present_count,
-              SUM(at.parent_present = 0) AS absent_count
-          FROM attendance at
-          JOIN activity_assignments aa2 ON aa2.id = at.activity_assignment_id
-          JOIN student_enrollments se ON se.student_id = at.student_id
-            AND se.section_id = aa2.section_id AND se.school_year_id = ?
-          JOIN students s ON s.id = se.student_id AND s.is_deleted = 0
-          ${
-            parentIdList.length
-              ? `INNER JOIN student_parents sp ON sp.student_id = s.id AND sp.parent_id IN (${parentIdList
-                  .map(() => '?')
-                  .join(',')})`
-              : ''
-          }
-          GROUP BY at.activity_assignment_id
-      ) att ON att.activity_assignment_id = aa.id
-      -- PAYMENTS (filtered via enrollments + optional parents)
-      LEFT JOIN (
+                SELECT
+                    at.activity_assignment_id,
+                    SUM(at.parent_present = 1) AS present_count,
+                    SUM(at.parent_present = 0) AS absent_count
+                FROM attendance at
+                JOIN activity_assignments aa2 ON aa2.id = at.activity_assignment_id
+                JOIN student_enrollments se ON se.student_id = at.student_id
+                  AND se.section_id = aa2.section_id AND se.school_year_id = ?
+                JOIN students s ON s.id = se.student_id AND s.is_deleted = 0
+                ${
+                  parentIdList.length
+                    ? `INNER JOIN student_parents sp ON sp.student_id = s.id AND sp.parent_id IN (${parentIdList
+                        .map(() => '?')
+                        .join(',')})`
+                    : ''
+                }
+                GROUP BY at.activity_assignment_id
+            ) att ON att.activity_assignment_id = aa.id
+            -- PAYMENTS (filtered via enrollments + optional parents)
+            LEFT JOIN (
           SELECT
               p.activity_assignment_id,
               SUM(p.paid = 1) AS paid_count,
-              SUM(p.paid = 0) AS unpaid_count
+              -- exclude from "unpaid" if the student made a contribution for this activity_assignment
+              SUM(
+                p.paid = 0
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM contributions c
+                  WHERE c.activity_assignment_id = p.activity_assignment_id
+                    AND c.student_id = p.student_id
+                )
+              ) AS unpaid_count,
+              -- total money actually paid
+              SUM(CASE WHEN p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total
           FROM payments p
           JOIN activity_assignments aa3 ON aa3.id = p.activity_assignment_id
           JOIN student_enrollments se2 ON se2.student_id = p.student_id
@@ -150,6 +162,7 @@ export default async function handler(req, res) {
         absent_count: Number(t.absent_count || 0),
         paid_count: Number(t.paid_count || 0),
         unpaid_count: Number(t.unpaid_count || 0),
+        paid_amount_total: Number(t.paid_amount_total || 0),
         contrib_students: Number(t.contrib_students || 0),
         contrib_hours_total: Number(t.contrib_hours_total || 0),
         contrib_estimated_total: Number(t.contrib_estimated_total || 0)

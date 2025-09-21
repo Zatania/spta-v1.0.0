@@ -96,6 +96,7 @@ export default function TeacherDashboard() {
         absent_count: a.absent_count,
         paid_count: a.paid_count,
         unpaid_count: a.unpaid_count,
+        paid_amount_total: a.paid_amount_total,
 
         // include contribution fields from the API
         contrib_students: a.contrib_students,
@@ -474,6 +475,15 @@ export default function TeacherDashboard() {
     { field: 'absent_count', headerName: 'Absent', flex: 0.4 },
     { field: 'paid_count', headerName: 'Paid', flex: 0.4 },
     { field: 'unpaid_count', headerName: 'Unpaid', flex: 0.4 },
+    {
+      field: 'paid_amount_total',
+      headerName: '₱ Paid',
+      flex: 0.5,
+      valueGetter: p => Number(p.row.paid_amount_total || 0),
+      valueFormatter: ({ value }) => Number(value || 0).toFixed(2),
+      align: 'right',
+      headerAlign: 'right'
+    },
     { field: 'contrib_students', headerName: 'With Contributions', flex: 0.6 },
     { field: 'contrib_hours_total', headerName: 'Hours (Σ)', flex: 0.5 },
     { field: 'contrib_estimated_total', headerName: 'Est. Value (Σ)', flex: 0.6 }

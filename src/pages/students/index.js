@@ -34,6 +34,7 @@ import axios from 'axios'
 import { DataGrid } from '@mui/x-data-grid'
 import debounce from 'lodash.debounce'
 import { saveAs } from 'file-saver'
+import Autocomplete from '@mui/material/Autocomplete'
 
 export default function StudentsPage() {
   const { data: session, status } = useSession()
@@ -41,7 +42,6 @@ export default function StudentsPage() {
   const [grades, setGrades] = useState([])
   const [sectionsAll, setSectionsAll] = useState([])
   const [teachers, setTeachers] = useState([])
-  const [parents, setParents] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
 
@@ -63,6 +63,11 @@ export default function StudentsPage() {
   // dialog (add/edit)
   const [open, setOpen] = useState(false)
   const [isEditing, setIsEditing] = useState(false) // Track if we're editing vs creating
+
+  // parents
+  const [parents, setParents] = useState([])
+  const [parentsLoading, setParentsLoading] = useState(false)
+  const [parentsInput, setParentsInput] = useState('')
 
   const emptyForm = {
     id: null,
@@ -203,15 +208,33 @@ export default function StudentsPage() {
   }
 
   // Fetch all parents for dropdown
-  const fetchParents = async () => {
+
+  const searchParents = debounce((query, loader) => {
+    loader(query)
+  }, 300)
+
+  const fetchParents = async (q = '') => {
+    setParentsLoading(true)
     try {
-      const res = await axios.get('/api/parents')
-      setParents(res.data?.parents ?? res.data ?? [])
-    } catch (err) {
-      console.error('Failed to load parents', err)
-      setParents([])
+      const res = await axios.get('/api/parents', {
+        params: { search: q || undefined, page_size: 100, page: 1 }
+      })
+      setParents(res.data?.parents ?? [])
+
+      return res.data // <-- so callers can inspect
+    } finally {
+      setParentsLoading(false)
     }
   }
+
+  const selectedParent = (() => {
+    const fromOptions = parents.find(p => String(p.id) === String(form.parent_id))
+
+    return fromOptions || form.parent || null
+  })()
+
+  const parentOptionsMerged =
+    selectedParent && !parents.some(p => p.id === selectedParent.id) ? [selectedParent, ...parents] : parents
 
   // Build query params for listing students, always ensure teacher restrictions are applied client-side too
   const buildListParams = (overrides = {}) => {
@@ -389,6 +412,8 @@ export default function StudentsPage() {
       const res = await axios.get(`/api/students/${row.id}`)
       const stu = res.data
 
+      const primaryParent = (stu.parents && stu.parents[0]) || null
+
       const newForm = {
         id: stu.id,
         first_name: stu.first_name,
@@ -397,7 +422,8 @@ export default function StudentsPage() {
         grade_id: String(stu.grade_id ?? ''),
         section_id: String(stu.section_id ?? ''),
         teacher_id: String(stu.teacher_id ?? ''),
-        parent_id: stu.parents?.[0]?.id ? String(stu.parents[0].id) : '',
+        parent_id: primaryParent?.id ? String(primaryParent.id) : '',
+        parent: primaryParent, // <-- keep the whole object for Autocomplete stability
         picture: null,
         picture_preview: stu.picture_url || null
       }
@@ -488,11 +514,17 @@ export default function StudentsPage() {
       const res = await axios.post('/api/parents', parentForm)
       const newParentId = res.data.id
 
-      // Refresh parents list
-      await fetchParents()
+      // Refresh and try to center the new parent by searching its name
+      const q = `${parentForm.last_name} ${parentForm.first_name}`.trim()
+      await fetchParents(q)
+      const created = (listResp?.parents || []).find(p => String(p.id) === String(newParentId)) || null
 
       // Auto-select the newly created parent
-      setForm(prev => ({ ...prev, parent_id: String(newParentId) }))
+      setForm(prev => ({
+        ...prev,
+        parent_id: String(newParentId),
+        parent: created // <-- stash the object so value stays stable
+      }))
 
       setParentDialogOpen(false)
       setParentForm({
@@ -871,20 +903,29 @@ export default function StudentsPage() {
               </Button>
             </Box>
 
-            <TextField
-              select
-              label='Select Parent'
-              value={form.parent_id}
-              onChange={e => setForm({ ...form, parent_id: e.target.value })}
+            <Autocomplete
+              options={parents}
+              size='small'
               fullWidth
-            >
-              <MenuItem value=''>-- No Parent Selected --</MenuItem>
-              {(Array.isArray(parents) ? parents : []).map(p => (
-                <MenuItem key={p.id} value={String(p.id)}>
-                  {p.first_name} {p.last_name} {p.contact_info ? `(${p.contact_info})` : ''}
-                </MenuItem>
-              ))}
-            </TextField>
+              value={selectedParent}
+              onChange={(_e, val) => setForm({ ...form, parent_id: val ? String(val.id) : '' })}
+              getOptionLabel={o =>
+                o ? `${o.last_name}, ${o.first_name}${o.contact_info ? ` (${o.contact_info})` : ''}` : ''
+              }
+              isOptionEqualToValue={(opt, val) => String(opt?.id) === String(val?.id)}
+              onInputChange={(_e, input, reason) => {
+                setParentsInput(input)
+                if (reason === 'input') {
+                  if (input && input.length >= 2) fetchParents(input)
+                  else fetchParents('')
+                }
+              }}
+              loadingText='Searching...'
+              renderInput={params => (
+                <TextField {...params} label='Select Parent' placeholder='Type to search parents' />
+              )}
+              noOptionsText='No parents found'
+            />
           </Box>
         </DialogContent>
 

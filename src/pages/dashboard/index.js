@@ -53,8 +53,11 @@ import TablePagination from '@mui/material/TablePagination'
 const COLORS = ['#2E86AB', '#F6C85F', '#F26419', '#7BC043', '#A52A2A', '#6A5ACD']
 
 const paymentColors = {
-  Paid: '#7BC043',
-  Unpaid: '#F26419'
+  Paid: '#2E7D32', // success
+  Partial: '#7BC043', // light success
+  'Contrib only': '#1976D2', // info
+  'No fee/Excluded': '#9E9E9E', // grey
+  Unpaid: '#F26419' // warning
 }
 
 // View types
@@ -161,7 +164,96 @@ const Dashboard = () => {
   const [pdfError, setPdfError] = useState('')
   const [previewEndpoint, setPreviewEndpoint] = useState('')
 
+  // new
+  const MONEY_BLUE = '#1976D2'
+  const CONTRIB_BROWN = '#795548'
+  const CONTRIB_GREEN = '#2E7D32'
+
+  // tells charts whether to render "money from payments" vs "money from contributions"
+  const usesFee = feeType => ['fee', 'mixed'].includes(String(feeType || '').toLowerCase())
+
   // ---------- Fetchers ----------
+
+  // --- Contributions: overview / by grade / by section ---
+  const [contribOverview, setContribOverview] = useState(null)
+  const [contribByGrade, setContribByGrade] = useState([])
+  const [contribBySection, setContribBySection] = useState([])
+  const [loadingContribOverview, setLoadingContribOverview] = useState(false)
+  const [loadingContribByGrade, setLoadingContribByGrade] = useState(false)
+  const [loadingContribBySection, setLoadingContribBySection] = useState(false)
+  const [errorContrib, setErrorContrib] = useState(null)
+  const [contribGradeSelected, setContribGradeSelected] = useState(null)
+
+  const fetchContribOverview = async () => {
+    setLoadingContribOverview(true)
+    setErrorContrib(null)
+    try {
+      const { data } = await axios.get('/api/summary', {
+        params: {
+          view: 'contribOverview',
+          from_date: fromDate || undefined,
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
+        }
+      })
+
+      // expected: { totals: { students: n, hours_total: n, est_value_total: n }, by_activity?: [...] }
+      setContribOverview(data?.totals || null)
+    } catch (e) {
+      setErrorContrib(e?.response?.data?.message || 'Failed to load contributions overview')
+    } finally {
+      setLoadingContribOverview(false)
+    }
+  }
+
+  const fetchContribByGrade = async () => {
+    setLoadingContribByGrade(true)
+    setErrorContrib(null)
+    try {
+      const { data } = await axios.get('/api/summary', {
+        params: {
+          view: 'contribByGrade',
+          from_date: fromDate || undefined,
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
+        }
+      })
+
+      // rows: [{ grade_id, grade_name, contrib_students, contrib_hours_total, contrib_estimated_total }]
+      setContribByGrade(data?.by_grade || [])
+    } catch (e) {
+      setErrorContrib(e?.response?.data?.message || 'Failed to load contributions by grade')
+    } finally {
+      setLoadingContribByGrade(false)
+    }
+  }
+
+  const fetchContribBySection = async gradeId => {
+    if (!gradeId) return
+    setLoadingContribBySection(true)
+    setErrorContrib(null)
+    try {
+      const { data } = await axios.get('/api/summary', {
+        params: {
+          view: 'contribBySection',
+          grade_id: gradeId,
+          from_date: fromDate || undefined,
+          to_date: toDate || undefined,
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
+        }
+      })
+
+      // rows: [{ section_id, section_name, contrib_students, contrib_hours_total, contrib_estimated_total }]
+      setContribBySection(data?.by_section || [])
+    } catch (e) {
+      setErrorContrib(e?.response?.data?.message || 'Failed to load contributions by section')
+    } finally {
+      setLoadingContribBySection(false)
+    }
+  }
 
   const parentIdsParam = () => (parentFilter && parentFilter.length ? parentFilter.map(p => p.id).join(',') : undefined)
 
@@ -442,6 +534,51 @@ const Dashboard = () => {
     } finally {
       setParentLoading(false)
     }
+  }
+
+  // Map API keys -> friendly labels (order matters)
+  const PAYMENT_SERIES_ORDER = [
+    { key: 'paid_count', label: 'Paid' },
+    { key: 'partial_count', label: 'Partial' },
+    { key: 'contrib_count', label: 'Contrib only' },
+    { key: 'exempt_count', label: 'No fee/Excluded' },
+    { key: 'unpaid_count', label: 'Unpaid' }
+  ]
+
+  // For overview totals (flat object like overview.payments)
+  const OVERVIEW_TOTALS_ORDER = [
+    { key: 'total_paid', label: 'Paid' },
+    { key: 'total_partial', label: 'Partial' },
+    { key: 'total_contrib_only', label: 'Contrib only' },
+    { key: 'total_exempt', label: 'No fee/Excluded' },
+    { key: 'total_unpaid', label: 'Unpaid' }
+  ]
+
+  const pickExistingSeries = row => PAYMENT_SERIES_ORDER.filter(s => row && typeof row[s.key] !== 'undefined')
+
+  const toPieSeriesFromOverview = totals => {
+    if (!totals) return []
+
+    // Prefer richer keys if present, else fall back to paid/unpaid
+    const series = OVERVIEW_TOTALS_ORDER.filter(s => typeof totals[s.key] !== 'undefined').map(s => ({
+      name: s.label,
+      value: Number(totals[s.key] || 0),
+      fill: paymentColors[s.label]
+    }))
+
+    // Fallback for older API that only has total_paid / total_unpaid
+    if (series.length === 0) {
+      const paid = Number(totals.total_paid ?? 0)
+      const unpaid = Number(totals.total_unpaid ?? 0)
+      if (paid + unpaid === 0) return []
+
+      return [
+        { name: 'Paid', value: paid, fill: paymentColors['Paid'] },
+        { name: 'Unpaid', value: unpaid, fill: paymentColors['Unpaid'] }
+      ]
+    }
+
+    return series
   }
 
   const fetchPupilsForParents = async parents => {
@@ -746,6 +883,8 @@ const Dashboard = () => {
     fetchOverview()
     fetchByGrade()
     fetchActivitiesOverview()
+    fetchContribOverview()
+    fetchContribByGrade()
   }, [fromDate, toDate, parentFilter, schoolYearId])
 
   // load parent options on mount (or you can lazy-load via Autocomplete's onInputChange)
@@ -814,11 +953,156 @@ const Dashboard = () => {
     )
   }
 
+  const renderContributions = () => (
+    <Box sx={{ mt: 3 }}>
+      <Card>
+        <CardContent>
+          <Box display='flex' justifyContent='space-between' alignItems='center' sx={{ mb: 2 }}>
+            <Box>
+              <Typography variant='h6'>
+                Contributions Overview
+                {selectedSchoolYear && (
+                  <Chip component='span' label={selectedSchoolYear.name} size='small' sx={{ ml: 1 }} />
+                )}
+              </Typography>
+              <Typography variant='body2' color='text.secondary'>
+                Counts and totals from services/materials/labor contributions.
+              </Typography>
+            </Box>
+            <Button
+              size='small'
+              onClick={() =>
+                exportTableToCSV(
+                  contribByGrade.map(g => ({
+                    grade: g.grade_name,
+                    contrib_students: g.contrib_students || 0,
+                    hours_total: g.contrib_hours_total || 0,
+                    est_value_total: g.contrib_estimated_total || 0
+                  })),
+                  'contrib_by_grade.csv'
+                )
+              }
+            >
+              Export CSV
+            </Button>
+          </Box>
+
+          {/* Totals */}
+          {loadingContribOverview ? (
+            <Box display='flex' justifyContent='center' p={4}>
+              <CircularProgress />
+            </Box>
+          ) : errorContrib ? (
+            <Alert severity='error'>{errorContrib}</Alert>
+          ) : (
+            <Stack direction='row' spacing={2} sx={{ mb: 2, flexWrap: 'wrap' }}>
+              <Chip color='primary' label={`Parents Contributed: ${contribOverview?.students ?? 0}`} />
+              <Chip color='success' label={`Hours Σ: ${Number(contribOverview?.hours_total ?? 0).toFixed(2)}`} />
+              <Chip color='default' label={`Est. ₱ Σ: ${Number(contribOverview?.est_value_total ?? 0).toFixed(2)}`} />
+            </Stack>
+          )}
+
+          {/* By grade chart (stack hours  value for a quick view) */}
+          {loadingContribByGrade ? (
+            <Box display='flex' justifyContent='center' p={4}>
+              <CircularProgress />
+            </Box>
+          ) : contribByGrade.length === 0 ? (
+            <Alert severity='info'>No contribution data in this range.</Alert>
+          ) : (
+            <>
+              <Box height={320}>
+                <ResponsiveContainer width='100%' height='100%'>
+                  <BarChart data={contribByGrade} margin={{ top: 20, right: 20, left: 10, bottom: 60 }}>
+                    <XAxis dataKey='grade_name' interval={0} angle={-40} textAnchor='end' height={80} />
+                    <YAxis allowDecimals={false} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey='contrib_students' name='Parents Contributed' fill={CONTRIB_GREEN} />
+                    <Bar dataKey='contrib_hours_total' name='Hours Σ' fill='#009688' />
+                    <Bar dataKey='contrib_estimated_total' name='Est. ₱ Σ' fill={CONTRIB_BROWN} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Box>
+
+              <Divider sx={{ my: 2 }} />
+              <Box sx={{ maxHeight: 260, overflow: 'auto' }}>
+                <Table size='small'>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Grade</TableCell>
+                      <TableCell align='right'>Parents Contributed</TableCell>
+                      <TableCell align='right'>Hours Σ</TableCell>
+                      <TableCell align='right'>Est. ₱ Σ</TableCell>
+                      <TableCell align='right'>Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {contribByGrade.map(g => (
+                      <TableRow key={g.grade_id} hover>
+                        <TableCell>{g.grade_name}</TableCell>
+                        <TableCell align='right'>{g.contrib_students ?? 0}</TableCell>
+                        <TableCell align='right'>{Number(g.contrib_hours_total ?? 0).toFixed(2)}</TableCell>
+                        <TableCell align='right'>{Number(g.contrib_estimated_total ?? 0).toFixed(2)}</TableCell>
+                        <TableCell align='right'>
+                          <Button
+                            size='small'
+                            onClick={() => {
+                              setContribGradeSelected(g)
+                              fetchContribBySection(g.grade_id ?? g.id)
+                            }}
+                          >
+                            View Sections
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            </>
+          )}
+
+          {/* By section when a grade is picked */}
+          {contribGradeSelected && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant='subtitle1' sx={{ mb: 1 }}>
+                Contributions — Sections in {contribGradeSelected.grade_name}
+              </Typography>
+              {loadingContribBySection ? (
+                <Box display='flex' justifyContent='center' p={4}>
+                  <CircularProgress />
+                </Box>
+              ) : contribBySection.length === 0 ? (
+                <Alert severity='info'>No section-level contribution data.</Alert>
+              ) : (
+                <Box height={320}>
+                  <ResponsiveContainer width='100%' height='100%'>
+                    <BarChart data={contribBySection} margin={{ top: 20, right: 20, left: 10, bottom: 60 }}>
+                      <XAxis dataKey='section_name' interval={0} angle={-40} textAnchor='end' height={80} />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey='contrib_students' name='Parents Contributed' fill={CONTRIB_GREEN} />
+                      <Bar dataKey='contrib_hours_total' name='Hours Σ' fill='#009688' />
+                      <Bar dataKey='contrib_estimated_total' name='Est. ₱ Σ' fill={CONTRIB_BROWN} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Box>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </Box>
+  )
+
   // --- renderPayments: payment charts & drill-down UI ---
   const renderPayments = () => {
     // main summary pie (overview)
-    const paid = overview?.payments?.total_paid ?? 0
-    const unpaid = overview?.payments?.total_unpaid ?? 0
+    const overviewSeries = toPieSeriesFromOverview(overview?.payments)
+    const totalOverview = overviewSeries.reduce((s, x) => s + x.value, 0)
 
     return (
       <Box ref={paymentsRef} sx={{ mt: 3 }}>
@@ -848,24 +1132,37 @@ const Dashboard = () => {
                   startIcon={<GetAppIcon />}
                   onClick={() => {
                     // export based on level
+
                     if (paymentsLevel === PAYMENTS_LEVELS.OVERVIEW) {
-                      exportTableToCSV([{ paid, unpaid }], 'payments_overview.csv')
+                      const row = {}
+                      overviewSeries.forEach(s => {
+                        row[s.name] = s.value
+                      })
+                      exportTableToCSV([row], 'payments_overview.csv')
                     } else if (paymentsLevel === PAYMENTS_LEVELS.BY_GRADE) {
+                      const series = pickExistingSeries(paymentsByGrade[0] || {})
                       exportTableToCSV(
-                        paymentsByGrade.map(g => ({
-                          grade: g.grade_name,
-                          paid: g.paid_count || 0,
-                          unpaid: g.unpaid_count || 0
-                        })),
+                        paymentsByGrade.map(g => {
+                          const row = { grade: g.grade_name }
+                          series.forEach(s => {
+                            row[s.label] = g[s.key] || 0
+                          })
+
+                          return row
+                        }),
                         'payments_by_grade.csv'
                       )
                     } else {
+                      const secSeries = pickExistingSeries(paymentsBySection[0] || {})
                       exportTableToCSV(
-                        paymentsBySection.map(s => ({
-                          section: s.section_name,
-                          paid: s.paid_count || 0,
-                          unpaid: s.unpaid_count || 0
-                        })),
+                        paymentsBySection.map(s => {
+                          const row = { section: s.section_name }
+                          secSeries.forEach(k => {
+                            row[k.label] = s[k.key] || 0
+                          })
+
+                          return row
+                        }),
                         'payments_by_section.csv'
                       )
                     }
@@ -895,28 +1192,14 @@ const Dashboard = () => {
                   </Box>
                 ) : (
                   (() => {
-                    const paid = Number(overview.payments.total_paid ?? 0)
-                    const unpaid = Number(overview.payments.total_unpaid ?? 0)
-                    const total = paid + unpaid
-
-                    // if no payments recorded, show a placeholder pie so the UI is not blank
-                    const pieData =
-                      total > 0
-                        ? [
-                            { name: 'Paid', value: paid, fill: paymentColors.Paid },
-                            { name: 'Unpaid', value: unpaid, fill: paymentColors.Unpaid }
-                          ]
-                        : [{ name: 'No data', value: 1 }]
-
-                    // colors for slices; use neutral color for "No data"
-                    //const sliceColors = total > 0 ? pieData.map(d => paymentColors[d.name] || '#CCCCCC') : ['#CCCCCC']
+                    const pieData = overviewSeries.length ? overviewSeries : [{ name: 'No data', value: 1 }]
 
                     return (
                       <>
                         <Box
                           height={240}
-                          sx={{ cursor: total > 0 ? 'pointer' : 'default' }}
-                          onClick={() => total > 0 && goToPaymentsByGrade()}
+                          sx={{ cursor: totalOverview > 0 ? 'pointer' : 'default' }}
+                          onClick={() => totalOverview > 0 && goToPaymentsByGrade()}
                         >
                           <ResponsiveContainer width='100%' height='100%'>
                             <PieChart>
@@ -935,7 +1218,7 @@ const Dashboard = () => {
 
                               <Legend
                                 payload={
-                                  total > 0
+                                  totalOverview > 0
                                     ? [
                                         { value: 'Paid', type: 'square', color: paymentColors.Paid },
                                         { value: 'Unpaid', type: 'square', color: paymentColors.Unpaid }
@@ -948,18 +1231,17 @@ const Dashboard = () => {
                           </ResponsiveContainer>
                         </Box>
 
-                        {total === 0 ? (
+                        {totalOverview === 0 ? (
                           <Alert severity='info' sx={{ mt: 2 }}>
                             No payment records found for the selected date range.
                           </Alert>
                         ) : (
                           <Stack direction='row' spacing={1} mt={1}>
-                            <Typography variant='body2'>
-                              Paid: <strong>{paid}</strong>
-                            </Typography>
-                            <Typography variant='body2' sx={{ ml: 2 }}>
-                              Unpaid: <strong>{unpaid}</strong>
-                            </Typography>
+                            {overviewSeries.map(s => (
+                              <Typography key={s.name} variant='body2'>
+                                {s.name}: <strong>{s.value}</strong>
+                              </Typography>
+                            ))}
                           </Stack>
                         )}
                       </>
@@ -989,22 +1271,20 @@ const Dashboard = () => {
                           <YAxis allowDecimals={false} />
                           <Tooltip />
                           <Legend />
-                          <Bar
-                            dataKey='paid_count'
-                            name='Paid'
-                            fill={paymentColors.Paid}
-                            onClick={data => handlePaymentsGradeClick(data.payload)}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {paymentsByGrade.map((g, i) => (
-                              <Cell key={`paid-${i}`} fill={paymentColors['Paid']} />
-                            ))}
-                          </Bar>
-                          <Bar dataKey='unpaid_count' name='Unpaid' fill={paymentColors.Unpaid}>
-                            {paymentsByGrade.map((g, i) => (
-                              <Cell key={`unpaid-${i}`} fill={paymentColors['Unpaid']} />
-                            ))}
-                          </Bar>
+                          {/* Money bar per grade: uses paid amount if fee applies, else contrib value */}
+                          {paymentsByGrade.length > 0 && (
+                            <Bar
+                              dataKey={g =>
+                                usesFee(g.fee_type) || g.applies_fee
+                                  ? Number(g.paid_amount_total || 0)
+                                  : Number(g.contrib_estimated_total || 0)
+                              }
+                              name='₱ Paid / Contrib'
+                              fill={MONEY_BLUE}
+                              onClick={data => handlePaymentsGradeClick(data.payload)}
+                              style={{ cursor: 'pointer' }}
+                            />
+                          )}
                         </BarChart>
                       </ResponsiveContainer>
                     </Box>
@@ -1016,8 +1296,12 @@ const Dashboard = () => {
                         <TableHead>
                           <TableRow>
                             <TableCell>Grade</TableCell>
-                            <TableCell align='right'>Paid</TableCell>
-                            <TableCell align='right'>Unpaid</TableCell>
+                            {pickExistingSeries(paymentsByGrade[0] || {}).map(s => (
+                              <TableCell key={s.key} align='right'>
+                                {s.label}
+                              </TableCell>
+                            ))}
+                            <TableCell align='right'>₱ Paid</TableCell>
                             <TableCell align='right'>Actions</TableCell>
                           </TableRow>
                         </TableHead>
@@ -1025,8 +1309,12 @@ const Dashboard = () => {
                           {paymentsByGrade.map(g => (
                             <TableRow key={g.grade_id} hover>
                               <TableCell>{g.grade_name}</TableCell>
-                              <TableCell align='right'>{g.paid_count ?? 0}</TableCell>
-                              <TableCell align='right'>{g.unpaid_count ?? 0}</TableCell>
+                              {pickExistingSeries(paymentsByGrade[0] || {}).map(s => (
+                                <TableCell key={s.key} align='right'>
+                                  {g[s.key] ?? 0}
+                                </TableCell>
+                              ))}
+                              <TableCell align='right'>{Number(g.paid_amount_total || 0).toFixed(2)}</TableCell>
                               <TableCell align='right'>
                                 <Button size='small' onClick={() => handlePaymentsGradeClick(g)}>
                                   View Sections
@@ -1062,16 +1350,25 @@ const Dashboard = () => {
                           <YAxis allowDecimals={false} />
                           <Tooltip />
                           <Legend />
-                          <Bar dataKey='paid_count' name='Paid' fill={paymentColors.Paid}>
-                            {paymentsBySection.map((s, i) => (
-                              <Cell key={`psec-${i}`} fill={paymentColors['Paid']} />
-                            ))}
-                          </Bar>
-                          <Bar dataKey='unpaid_count' name='Unpaid' fill={paymentColors.Unpaid}>
-                            {paymentsBySection.map((s, i) => (
-                              <Cell key={`usec-${i}`} fill={paymentColors['Unpaid']} />
-                            ))}
-                          </Bar>
+                          {(() => {
+                            // figure out which keys exist by inspecting the first row that has data
+                            const sample = paymentsByGrade.find(r => pickExistingSeries(r).length) || {}
+                            const series = pickExistingSeries(sample)
+
+                            return series.map(s => (
+                              <Bar
+                                key={s.key}
+                                dataKey={s.key}
+                                name={s.label}
+                                stackId='totals'
+                                fill={paymentColors[s.label]}
+                                onClick={
+                                  s.key === 'paid_count' ? data => handlePaymentsGradeClick(data.payload) : undefined
+                                }
+                                style={{ cursor: s.key === 'paid_count' ? 'pointer' : 'default' }}
+                              />
+                            ))
+                          })()}
                         </BarChart>
                       </ResponsiveContainer>
                     </Box>
@@ -1083,16 +1380,24 @@ const Dashboard = () => {
                         <TableHead>
                           <TableRow>
                             <TableCell>Section</TableCell>
-                            <TableCell align='right'>Paid</TableCell>
-                            <TableCell align='right'>Unpaid</TableCell>
+                            {pickExistingSeries(paymentsBySection[0] || {}).map(s => (
+                              <TableCell key={s.key} align='right'>
+                                {s.label}
+                              </TableCell>
+                            ))}
+                            <TableCell align='right'>₱ Paid</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
                           {paymentsBySection.map(s => (
                             <TableRow key={s.section_id} hover>
                               <TableCell>{s.section_name}</TableCell>
-                              <TableCell align='right'>{s.paid_count ?? 0}</TableCell>
-                              <TableCell align='right'>{s.unpaid_count ?? 0}</TableCell>
+                              {pickExistingSeries(paymentsBySection[0] || {}).map(k => (
+                                <TableCell key={k.key} align='right'>
+                                  {s[k.key] ?? 0}
+                                </TableCell>
+                              ))}
+                              <TableCell align='right'>{Number(s.paid_amount_total || 0).toFixed(2)}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -1787,6 +2092,11 @@ const Dashboard = () => {
           {renderPayments()}
         </Grid>
 
+        {/* Contributions Overview */}
+        <Grid item xs={12} md={12}>
+          {renderContributions()}
+        </Grid>
+
         {/* Activities Overview Section */}
         <Grid item xs={12} md={12}>
           {renderActivitiesOverview()}
@@ -1853,6 +2163,7 @@ const Dashboard = () => {
                   <TableCell align='center'>Absent</TableCell>
                   <TableCell align='center'>Paid</TableCell>
                   <TableCell align='center'>Unpaid</TableCell>
+                  <TableCell align='right'>₱ Paid</TableCell> {/* NEW */}
                   <TableCell align='center'>Actions</TableCell>
                 </TableRow>
               </TableHead>
@@ -1873,6 +2184,7 @@ const Dashboard = () => {
                     <TableCell align='center'>
                       <Chip label={activity.unpaid_count || 0} color='warning' size='small' />
                     </TableCell>
+                    <TableCell align='right'>{Number(activity.paid_amount_total || 0).toFixed(2)}</TableCell>
                     <TableCell align='center'>
                       <Button size='small' startIcon={<PeopleIcon />} onClick={() => handleActivityClick(activity)}>
                         View Students

@@ -37,6 +37,22 @@ export default async function handler(req, res) {
     school_year_id = null
   } = req.query
 
+  // Parent filter (comma-separated ids)
+  const parentIds = String(req.query.parent_ids || '')
+    .split(',')
+    .map(x => parseInt(x.trim(), 10))
+    .filter(Number.isFinite)
+
+  const hasParentFilter = parentIds.length > 0
+  const parentFilterParams = hasParentFilter ? parentIds : []
+
+  // helper WHERE for tables that already joined students as alias `s`
+  const parentWhereS = hasParentFilter
+    ? `AND EXISTS (SELECT 1 FROM student_parents sp WHERE sp.student_id = s.id AND sp.parent_id IN (${parentIds
+        .map(_ => '?')
+        .join(',')}))`
+    : ''
+
   // Date filters
   const dateParams = []
   const dateFiltersA = [] // uses alias a.activity_date
@@ -104,8 +120,17 @@ export default async function handler(req, res) {
       const [paymentsRows] = await db.query(
         `
         SELECT
-            SUM(p.paid = 1) AS total_paid,
-            SUM(p.paid = 0) AS total_unpaid
+          SUM(p.paid = 1) AS total_paid,
+          -- do NOT count as unpaid if the same student has a contribution for the same activity_assignment
+          SUM(
+            p.paid = 0
+            AND NOT EXISTS (
+              SELECT 1
+              FROM contributions c
+              WHERE c.activity_assignment_id = p.activity_assignment_id
+                AND c.student_id = p.student_id
+            )
+          ) AS total_unpaid
         FROM payments p
         JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
         JOIN activities a ON a.id = aa.activity_id
@@ -128,6 +153,119 @@ export default async function handler(req, res) {
         },
         payments: paymentsRows[0] ?? { total_paid: 0, total_unpaid: 0 }
       })
+    }
+
+    // ---------- CONTRIBUTIONS OVERVIEW ----------
+    if (view === 'contribOverview') {
+      // alias: contributions c -> activity_assignments aa -> activities a -> students s2
+      const parentWhereS2 = hasParentFilter
+        ? `AND EXISTS (SELECT 1 FROM student_parents sp2 WHERE sp2.student_id = s2.id AND sp2.parent_id IN (${parentIds
+            .map(_ => '?')
+            .join(',')}))`
+        : ''
+
+      const [rows] = await db.query(
+        `
+            SELECT
+              COUNT(DISTINCT c.parent_id) AS parents_contributed,
+              SUM(c.hours_worked)         AS hours_total,
+              SUM(c.estimated_value)      AS est_value_total
+            FROM contributions c
+            JOIN activity_assignments aa ON aa.id = c.activity_assignment_id
+            JOIN activities a            ON a.id  = aa.activity_id
+            JOIN students s2             ON s2.id = c.student_id AND s2.is_deleted = 0
+            WHERE a.is_deleted = 0
+              AND a.school_year_id = ?
+              ${dateWhereA}
+              ${parentWhereS2};
+            `,
+        [syId, ...dateParams, ...parentFilterParams]
+      )
+
+      const r = rows?.[0] || { parents_contributed: 0, hours_total: 0, est_value_total: 0 }
+
+      return res.status(200).json({
+        totals: {
+          // frontend label says "Parents Contributed", but prop name expected is "students"
+          // so we intentionally map parents -> "students" for display without another frontend change
+          students: Number(r.parents_contributed || 0),
+          hours_total: Number(r.hours_total || 0),
+          est_value_total: Number(r.est_value_total || 0)
+        }
+      })
+    }
+
+    // ---------- CONTRIBUTIONS BY GRADE ----------
+    if (view === 'contribByGrade') {
+      const parentWhereS2 = hasParentFilter
+        ? `AND EXISTS (SELECT 1 FROM student_parents sp2 WHERE sp2.student_id = s2.id AND sp2.parent_id IN (${parentIds
+            .map(_ => '?')
+            .join(',')}))`
+        : ''
+
+      const [rows] = await db.query(
+        `
+            SELECT
+              aa.grade_id,
+              g.name AS grade_name,
+              COUNT(DISTINCT c.parent_id) AS contrib_students,
+              SUM(c.hours_worked)         AS contrib_hours_total,
+              SUM(c.estimated_value)      AS contrib_estimated_total
+            FROM contributions c
+            JOIN activity_assignments aa ON aa.id = c.activity_assignment_id
+            JOIN activities a            ON a.id  = aa.activity_id
+            JOIN grades g                ON g.id  = aa.grade_id
+            JOIN students s2             ON s2.id = c.student_id AND s2.is_deleted = 0
+            WHERE a.is_deleted = 0
+              AND a.school_year_id = ?
+              ${dateWhereA}
+              ${parentWhereS2}
+            GROUP BY aa.grade_id, g.name
+            ORDER BY aa.grade_id;
+            `,
+        [syId, ...dateParams, ...parentFilterParams]
+      )
+
+      return res.status(200).json({ by_grade: rows ?? [] })
+    }
+
+    // ---------- CONTRIBUTIONS BY SECTION ----------
+    if (view === 'contribBySection') {
+      if (!grade_id) {
+        return res.status(400).json({ message: 'grade_id is required for view=contribBySection' })
+      }
+
+      const parentWhereS2 = hasParentFilter
+        ? `AND EXISTS (SELECT 1 FROM student_parents sp2 WHERE sp2.student_id = s2.id AND sp2.parent_id IN (${parentIds
+            .map(_ => '?')
+            .join(',')}))`
+        : ''
+
+      const [rows] = await db.query(
+        `
+            SELECT
+              aa.section_id,
+              s.name AS section_name,
+              COUNT(DISTINCT c.parent_id) AS contrib_students,
+              SUM(c.hours_worked)         AS contrib_hours_total,
+              SUM(c.estimated_value)      AS contrib_estimated_total
+            FROM contributions c
+            JOIN activity_assignments aa ON aa.id = c.activity_assignment_id
+            JOIN activities a            ON a.id  = aa.activity_id
+            JOIN sections s              ON s.id  = aa.section_id AND s.is_deleted = 0
+            JOIN students s2             ON s2.id = c.student_id AND s2.is_deleted = 0
+            WHERE a.is_deleted = 0
+              AND a.school_year_id = ?
+              ${dateWhereA}
+              AND aa.grade_id = ?
+              ${parentWhereS2}
+            GROUP BY aa.section_id, s.name
+            ORDER BY s.name;
+            `,
+        [syId, ...dateParams, grade_id, ...parentFilterParams]
+      )
+
+      return res.status(200).json({ by_section: rows ?? [] })
     }
 
     // ---------- BY GRADE ----------
@@ -192,7 +330,7 @@ export default async function handler(req, res) {
           AND a.is_deleted = 0
           AND a.school_year_id = ?
           ${dateWhereA}
-        ORDER BY a.activity_date DESC
+        ORDER BY activity_date DESC
         `,
         [section_id, syId, ...dateParams]
       )
@@ -317,64 +455,91 @@ export default async function handler(req, res) {
       })
     }
 
-    // ---------- PAYMENTS BY GRADE ----------
+    // ---------- PAYMENTS BY GRADE (enhanced) ----------
     if (view === 'paymentsByGrade') {
       const gradeFilter = grade_id ? 'AND aa.grade_id = ?' : ''
 
-      const params = grade_id ? [syId, ...dateParams, grade_id] : [syId, ...dateParams]
+      // parent filter uses alias s (students from payments)
+      const params = grade_id
+        ? [syId, ...dateParams, ...parentFilterParams, grade_id]
+        : [syId, ...dateParams, ...parentFilterParams]
 
       const [rows] = await db.query(
         `
-        SELECT
-            aa.grade_id,
-            g.name AS grade_name,
-            SUM(p.paid = 1) AS paid_count,
-            SUM(p.paid = 0) AS unpaid_count
-        FROM payments p
-        JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
-        JOIN activities a ON a.id = aa.activity_id
-        JOIN grades g ON g.id = aa.grade_id
-        JOIN students s ON s.id = p.student_id AND s.is_deleted = 0
-        WHERE a.is_deleted = 0
-          AND a.school_year_id = ?
-          ${dateWhereA}
-          ${gradeFilter}
-        GROUP BY aa.grade_id, g.name
-        ORDER BY aa.grade_id;
-        `,
+            SELECT
+              aa.grade_id,
+              g.name AS grade_name,
+              SUM(p.paid = 1) AS paid_count,
+              SUM(
+                p.paid = 0
+                AND NOT EXISTS (
+                  SELECT 1 FROM contributions c
+                  WHERE c.activity_assignment_id = p.activity_assignment_id
+                    AND c.student_id = p.student_id
+                )
+              ) AS unpaid_count,
+              SUM(CASE WHEN p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total,
+              CASE WHEN SUM(CASE WHEN a.fee_type IN ('fee','mixed') THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS applies_fee,
+              CASE WHEN SUM(CASE WHEN a.fee_type IN ('fee','mixed') THEN 1 ELSE 0 END) > 0 THEN 'fee' ELSE 'nonfee' END AS fee_type
+            FROM payments p
+            JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
+            JOIN activities a            ON a.id  = aa.activity_id
+            JOIN grades g                ON g.id  = aa.grade_id
+            JOIN students s              ON s.id  = p.student_id AND s.is_deleted = 0
+            WHERE a.is_deleted = 0
+              AND a.school_year_id = ?
+              ${dateWhereA}
+              ${parentWhereS}
+            GROUP BY aa.grade_id, g.name
+            ORDER BY aa.grade_id;
+
+
+            `,
         params
       )
 
       return res.status(200).json({ payments_by_grade: rows ?? [] })
     }
 
-    // ---------- PAYMENTS BY SECTION ----------
+    // ---------- PAYMENTS BY SECTION (enhanced) ----------
     if (view === 'paymentsBySection') {
       if (!grade_id) {
         return res.status(400).json({ message: 'grade_id is required for view=paymentsBySection' })
       }
 
-      const params = [syId, ...dateParams, grade_id]
+      const params = [syId, ...dateParams, ...parentFilterParams, grade_id]
 
       const [rows] = await db.query(
         `
-        SELECT
-            aa.section_id,
-            s.name AS section_name,
-            SUM(p.paid = 1) AS paid_count,
-            SUM(p.paid = 0) AS unpaid_count
-        FROM payments p
-        JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
-        JOIN activities a ON a.id = aa.activity_id
-        JOIN sections s ON s.id = aa.section_id AND s.is_deleted = 0
-        JOIN students st ON st.id = p.student_id AND st.is_deleted = 0
-        WHERE a.is_deleted = 0
-          AND a.school_year_id = ?
-          ${dateWhereA}
-          AND aa.grade_id = ?
-        GROUP BY aa.section_id, s.name
-        ORDER BY s.name;
-        `,
+            SELECT
+              aa.section_id,
+              sct.name AS section_name,
+              SUM(p.paid = 1) AS paid_count,
+              SUM(
+                p.paid = 0
+                AND NOT EXISTS (
+                  SELECT 1 FROM contributions c
+                  WHERE c.activity_assignment_id = p.activity_assignment_id
+                    AND c.student_id = p.student_id
+                )
+              ) AS unpaid_count,
+              SUM(CASE WHEN p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total,
+              CASE WHEN SUM(CASE WHEN a.fee_type IN ('fee','mixed') THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS applies_fee,
+              CASE WHEN SUM(CASE WHEN a.fee_type IN ('fee','mixed') THEN 1 ELSE 0 END) > 0 THEN 'fee' ELSE 'nonfee' END AS fee_type
+            FROM payments p
+            JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
+            JOIN activities a            ON a.id  = aa.activity_id
+            JOIN sections sct            ON sct.id = aa.section_id AND sct.is_deleted = 0
+            JOIN students s              ON s.id  = p.student_id AND s.is_deleted = 0
+            WHERE a.is_deleted = 0
+              AND a.school_year_id = ?
+              ${dateWhereA}
+              ${parentWhereS}
+              AND aa.grade_id = ?
+            GROUP BY aa.section_id, sct.name
+            ORDER BY sct.name;
+
+            `,
         params
       )
 
@@ -460,7 +625,7 @@ export default async function handler(req, res) {
             AND a.is_deleted = 0
             AND a.school_year_id = ?
             ${dateWhereA}
-          ORDER BY a.activity_date DESC
+          ORDER BY activity_date DESC
           `,
         [section_id, syId, ...dateParams]
       )
@@ -486,7 +651,15 @@ export default async function handler(req, res) {
           `
           SELECT
             SUM(p.paid = 1) AS paid_count,
-            SUM(p.paid = 0) AS unpaid_count
+            SUM(
+              p.paid = 0
+              AND NOT EXISTS (
+                SELECT 1 FROM contributions c
+                WHERE c.activity_assignment_id = aa.id
+                  AND c.student_id = p.student_id
+              )
+            ) AS unpaid_count,
+            SUM(CASE WHEN p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total
           FROM payments p
           JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
           WHERE aa.activity_id = ? AND aa.section_id = ?
@@ -503,7 +676,8 @@ export default async function handler(req, res) {
           parent_present_count: attRows[0]?.parent_present_count || 0,
           parent_absent_count: attRows[0]?.parent_absent_count || 0,
           paid_count: payRows[0]?.paid_count || 0,
-          unpaid_count: payRows[0]?.unpaid_count || 0
+          unpaid_count: payRows[0]?.unpaid_count || 0,
+          paid_amount_total: Number(payRows[0]?.paid_amount_total || 0)
         })
       }
 

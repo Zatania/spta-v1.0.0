@@ -22,6 +22,8 @@ import {
   Divider,
   Alert
 } from '@mui/material'
+import FlagIcon from '@mui/icons-material/Flag'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
@@ -106,6 +108,36 @@ export default function StudentsPage() {
     grade_id: '',
     section_id: ''
   })
+
+  const [statusOpen, setStatusOpen] = useState(false)
+
+  const [statusForm, setStatusForm] = useState({
+    enrollment_id: '',
+    status: '',
+    completion_school_year_id: '',
+    completion_grade_id: '',
+    completion_section_id: ''
+  })
+
+  const Hint = ({ title }) => (
+    <InputAdornment position='end' sx={{ ml: 0.5 }}>
+      <Tooltip title={title}>
+        <InfoOutlinedIcon fontSize='small' sx={{ color: 'text.secondary', cursor: 'help' }} />
+      </Tooltip>
+    </InputAdornment>
+  )
+
+  const openStatus = row => {
+    setActiveRow(row)
+    setStatusForm({
+      enrollment_id: String(row.enrollment_id || ''), // must be provided by API
+      status: row.enrollment_status || '',
+      completion_school_year_id: row.completion_school_year_id ? String(row.completion_school_year_id) : '',
+      completion_grade_id: row.completion_grade_id ? String(row.completion_grade_id) : '',
+      completion_section_id: row.completion_section_id ? String(row.completion_section_id) : ''
+    })
+    setStatusOpen(true)
+  }
 
   useEffect(() => {
     // load school years once
@@ -569,35 +601,37 @@ export default function StudentsPage() {
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 80 },
-
-    /* {
-      field: 'picture',
-      headerName: 'Photo',
-      width: 80,
-      renderCell: params => (
-        <Avatar
-          src={params.row.picture_url}
-          alt={`${params.row.first_name} ${params.row.last_name}`}
-          sx={{ width: 40, height: 40 }}
-        >
-          {params.row.first_name?.[0]}
-          {params.row.last_name?.[0]}
-        </Avatar>
-      )
-    }, */
     { field: 'lrn', headerName: 'LRN', width: 140 },
     { field: 'last_name', headerName: 'Last name', width: 140 },
-    { field: 'first_name', headerName: 'First name', flex: 1 },
+    { field: 'first_name', headerName: 'First name', width: 140 },
     { field: 'grade_name', headerName: 'Grade', width: 120 },
-    { field: 'section_name', headerName: 'Section', width: 160 },
-    { field: 'teacher_name', headerName: 'Teacher', width: 160 },
+    {
+      field: 'enrollment_status',
+      headerName: 'Status',
+      width: 150,
+      valueGetter: p => {
+        const m = {
+          active: 'Active',
+          promoted: 'Promoted',
+          withdrawn: 'Drop out',
+          retained: 'Retain',
+          transferred: 'Transfer',
+          completed: 'Complete'
+        }
+
+        return m[p.row.enrollment_status] || p.row.enrollment_status || ''
+      }
+    },
+
+    /* { field: 'section_name', headerName: 'Section', width: 140 },
+    { field: 'teacher_name', headerName: 'Teacher', width: 160 }, */
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 150,
+      width: 200,
       renderCell: params => (
         <Stack direction='row' spacing={1}>
-          <Tooltip title='Edit'>
+          <Tooltip title='Edit student details'>
             <IconButton size='small' onClick={() => openEdit(params.row)}>
               <EditIcon fontSize='small' />
             </IconButton>
@@ -607,14 +641,19 @@ export default function StudentsPage() {
               <DeleteIcon fontSize='small' />
             </IconButton>
           </Tooltip>
-          <Tooltip title='Promote to next year'>
+          <Tooltip title='End-of-year move to next school year. Marks this year as Promoted.'>
             <IconButton size='small' onClick={() => openPromote(params.row)}>
               <UpgradeIcon fontSize='small' />
             </IconButton>
           </Tooltip>
-          <Tooltip title='Transfer (same year)'>
+          <Tooltip title='Mid-year internal move within the same school year.'>
             <IconButton size='small' onClick={() => openTransfer(params.row)}>
               <SwapHorizIcon fontSize='small' />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title='Set end-of-year outcome: Retain, Drop out, Transfer (out), or Complete (Grade 6).'>
+            <IconButton size='small' onClick={() => openStatus(params.row)}>
+              <FlagIcon fontSize='small' />
             </IconButton>
           </Tooltip>
         </Stack>
@@ -819,6 +858,8 @@ export default function StudentsPage() {
               onChange={e => setForm({ ...form, lrn: e.target.value })}
               fullWidth
               required
+              helperText='LRN must be unique in the system.'
+              InputProps={{ endAdornment: <Hint title='LRN duplicates are blocked on save.' /> }}
             />
           </Box>
 
@@ -841,6 +882,8 @@ export default function StudentsPage() {
               fullWidth
               disabled={shouldDisableGradeSection}
               required
+              helperText='Choose a grade first; available sections will follow.'
+              InputProps={{ endAdornment: <Hint title='Sections list depends on the selected grade.' /> }}
             >
               <MenuItem value=''>-- Select Grade --</MenuItem>
               {grades.map(g => (
@@ -866,6 +909,10 @@ export default function StudentsPage() {
               disabled={shouldDisableGradeSection}
               fullWidth
               required
+              helperText='After picking a section, the teacher may auto-fill.'
+              InputProps={{
+                endAdornment: <Hint title='We try to auto-select the teacher assigned to this section.' />
+              }}
             >
               <MenuItem value=''>-- Select Section --</MenuItem>
               {getAvailableSections().map(s => (
@@ -883,6 +930,8 @@ export default function StudentsPage() {
             value={form.teacher_id}
             onChange={e => setForm({ ...form, teacher_id: e.target.value })}
             fullWidth
+            helperText='Optional: assign a primary teacher for quick reference.'
+            InputProps={{ endAdornment: <Hint title='This links the student to a teacher’s section view.' /> }}
           >
             <MenuItem value=''>-- Select Teacher --</MenuItem>
             {getAvailableTeachers().map(t => (
@@ -922,7 +971,21 @@ export default function StudentsPage() {
               }}
               loadingText='Searching...'
               renderInput={params => (
-                <TextField {...params} label='Select Parent' placeholder='Type to search parents' />
+                <TextField
+                  {...params}
+                  label='Select Parent'
+                  placeholder='Type to search parents'
+                  helperText='Type 2+ characters to search • Use “Add New Parent” if not found.'
+                  InputProps={{
+                    ...params.InputProps,
+                    endAdornment: (
+                      <>
+                        <Hint title='Searching starts after 2 characters. You can also add a new parent.' />
+                        {params.InputProps.endAdornment}
+                      </>
+                    )
+                  }}
+                />
               )}
               noOptionsText='No parents found'
             />
@@ -997,6 +1060,8 @@ export default function StudentsPage() {
             value={promoteForm.school_year_id}
             onChange={e => setPromoteForm(f => ({ ...f, school_year_id: e.target.value }))}
             fullWidth
+            helperText='Creates a new enrollment row for the selected school year.'
+            InputProps={{ endAdornment: <Hint title='This does not modify the current year row.' /> }}
           >
             {schoolYears
               .filter(
@@ -1018,6 +1083,8 @@ export default function StudentsPage() {
             value={promoteForm.grade_id}
             onChange={e => setPromoteForm(f => ({ ...f, grade_id: e.target.value }))}
             fullWidth
+            helperText='Pick the grade for next school year (same grade if retained).'
+            InputProps={{ endAdornment: <Hint title='For repeaters, choose the same grade next SY.' /> }}
           >
             <MenuItem value=''>-- Select Grade --</MenuItem>
             {grades.map(g => (
@@ -1034,6 +1101,8 @@ export default function StudentsPage() {
             onChange={e => setPromoteForm(f => ({ ...f, section_id: e.target.value }))}
             fullWidth
             disabled={!promoteForm.grade_id}
+            helperText='Select a section in the chosen grade.'
+            InputProps={{ endAdornment: <Hint title='Section list is filtered by the selected grade.' /> }}
           >
             <MenuItem value=''>-- Select Section --</MenuItem>
             {sectionsAll
@@ -1079,6 +1148,8 @@ export default function StudentsPage() {
             value={transferForm.grade_id}
             onChange={e => setTransferForm(f => ({ ...f, grade_id: e.target.value }))}
             fullWidth
+            helperText='Mid-year internal move (same school year).'
+            InputProps={{ endAdornment: <Hint title='Internal reassignment—does not set status to “transferred”.' /> }}
           >
             <MenuItem value=''>-- Select Grade --</MenuItem>
             {grades.map(g => (
@@ -1095,6 +1166,8 @@ export default function StudentsPage() {
             onChange={e => setTransferForm(f => ({ ...f, section_id: e.target.value }))}
             fullWidth
             disabled={!transferForm.grade_id}
+            helperText='Pick a section in the selected grade.'
+            InputProps={{ endAdornment: <Hint title='Section list depends on the chosen grade.' /> }}
           >
             <MenuItem value=''>-- Select Section --</MenuItem>
             {sectionsAll
@@ -1126,6 +1199,146 @@ export default function StudentsPage() {
             disabled={!transferForm.grade_id || !transferForm.section_id}
           >
             Transfer
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Status Dialog */}
+      <Dialog open={statusOpen} onClose={() => setStatusOpen(false)} maxWidth='sm' fullWidth>
+        <DialogTitle>Set Status{activeRow ? ` – ${activeRow.last_name}, ${activeRow.first_name}` : ''}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          <TextField
+            select
+            label='Status'
+            value={statusForm.status}
+            onChange={e => setStatusForm(f => ({ ...f, status: e.target.value }))}
+            fullWidth
+            helperText={
+              statusForm.status === 'retained'
+                ? 'Retained = failed 3 or more learning areas this school year (still in roster).'
+                : statusForm.status === 'withdrawn'
+                ? 'Drop out = learner left during the current school year.'
+                : statusForm.status === 'transferred'
+                ? 'Transfer = learner moved to another school (exit).'
+                : statusForm.status === 'completed'
+                ? 'Complete = Grade 6 graduation (elementary completion).'
+                : 'Choose an end-of-year outcome or exit state.'
+            }
+            InputProps={{
+              endAdornment: (
+                <Hint title='Status tracks outcome for this school year. “Transfer” here means transfer OUT (exit).' />
+              )
+            }}
+          >
+            <MenuItem value='retained'>Retain</MenuItem>
+            <MenuItem value='withdrawn'>Drop out</MenuItem>
+            <MenuItem value='transferred'>Transfer</MenuItem>
+            <MenuItem value='completed'>Complete</MenuItem>
+          </TextField>
+
+          {statusForm.status === 'completed' && (
+            <>
+              <TextField
+                select
+                label='School Year *'
+                value={statusForm.completion_school_year_id}
+                onChange={e => setStatusForm(f => ({ ...f, completion_school_year_id: e.target.value }))}
+                fullWidth
+                required
+                helperText='Usually the current school year. Adjust only when encoding late.'
+                InputProps={{ endAdornment: <Hint title='Completion is recorded against a specific school year.' /> }}
+              >
+                {schoolYears.map(sy => (
+                  <MenuItem key={sy.id} value={String(sy.id)}>
+                    {sy.name}
+                    {sy.is_current ? ' (current)' : ''}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                select
+                label='Grade Level *'
+                value={statusForm.completion_grade_id}
+                onChange={e => setStatusForm(f => ({ ...f, completion_grade_id: e.target.value }))}
+                fullWidth
+                required
+                helperText='Must be Grade 6 to mark elementary completion.'
+                InputProps={{ endAdornment: <Hint title='API will reject non–Grade 6 completion.' /> }}
+              >
+                {grades.map(g => (
+                  <MenuItem key={g.id} value={String(g.id)}>
+                    {g.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                select
+                label='Grade Section (optional)'
+                value={statusForm.completion_section_id}
+                onChange={e => setStatusForm(f => ({ ...f, completion_section_id: e.target.value }))}
+                fullWidth
+                helperText='Optional: for record completeness if needed.'
+                InputProps={{ endAdornment: <Hint title='You may leave this blank.' /> }}
+              >
+                <MenuItem value=''>-- None --</MenuItem>
+                {sectionsAll
+                  .filter(
+                    s =>
+                      !statusForm.completion_grade_id || String(s.grade_id) === String(statusForm.completion_grade_id)
+                  )
+                  .map(s => (
+                    <MenuItem key={s.id} value={String(s.id)}>
+                      {s.name}
+                    </MenuItem>
+                  ))}
+              </TextField>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStatusOpen(false)}>Cancel</Button>
+          <Button
+            variant='contained'
+            onClick={async () => {
+              try {
+                if (!statusForm.enrollment_id) {
+                  alert('Missing enrollment id from API response. Please include enrollment_id in /api/students.')
+
+                  return
+                }
+
+                // require fields only if completed
+                if (
+                  statusForm.status === 'completed' &&
+                  (!statusForm.completion_school_year_id || !statusForm.completion_grade_id)
+                ) {
+                  alert('School Year and Grade Level are required when status is Complete.')
+
+                  return
+                }
+
+                await axios.post(`/api/student-enrollments/${statusForm.enrollment_id}/status`, {
+                  status: statusForm.status,
+                  completion_school_year_id:
+                    statusForm.status === 'completed' ? Number(statusForm.completion_school_year_id) : undefined,
+                  completion_grade_id:
+                    statusForm.status === 'completed' ? Number(statusForm.completion_grade_id) : undefined,
+                  completion_section_id:
+                    statusForm.status === 'completed' && statusForm.completion_section_id
+                      ? Number(statusForm.completion_section_id)
+                      : undefined
+                })
+
+                setStatusOpen(false)
+                fetchStudents({ page: 0 })
+              } catch (e) {
+                alert(e?.response?.data?.message ?? 'Update failed')
+              }
+            }}
+          >
+            Save
           </Button>
         </DialogActions>
       </Dialog>

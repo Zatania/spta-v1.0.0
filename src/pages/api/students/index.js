@@ -70,7 +70,12 @@ export default async function handler(req, res) {
       const sql = `
         SELECT
           st.id, st.first_name, st.last_name, st.lrn, st.picture_url,
+          en.id AS enrollment_id,
+          en.status AS enrollment_status,
           en.grade_id, en.section_id,
+          en.completion_school_year_id,
+          en.completion_grade_id,
+          en.completion_section_id,
           g.name AS grade_name,
           s.name AS section_name,
           u.full_name AS teacher_name

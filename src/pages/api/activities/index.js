@@ -229,8 +229,7 @@ export default async function handler(req, res) {
           }
 
           await conn.query(
-            `INSERT INTO activity_assignments (activity_id, grade_id, section_id)
-     VALUES (?, (SELECT grade_id FROM sections WHERE id = ?), ?)`,
+            `INSERT INTO activity_assignments (activity_id, grade_id, section_id) VALUES (?, (SELECT grade_id FROM sections WHERE id = ?), ?)`,
             [activityId, section_id, section_id]
           )
         } else {

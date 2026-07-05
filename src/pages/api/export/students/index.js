@@ -1,28 +1,27 @@
-// pages/api/export/students.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
-import db from '../../db' // adjust path if needed
-import { getCurrentSchoolYearId } from '../../lib/schoolYear'
+import db from '../../db'
+import { resolveSchoolYearId } from '../../lib/schoolYear'
 import ExcelJS from 'exceljs'
+
+function csv(v) {
+  if (v == null) return ''
+  const s = String(v)
+
+  return s.includes('"') || s.includes(',') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+}
 
 export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
-    const currentSyId = await getCurrentSchoolYearId()
+    const syId = await resolveSchoolYearId(req)
+    const { format = 'csv', grade_id = '', section_id = '', search = '', lrn = '' } = req.query
+    const fmt = String(format).toLowerCase()
 
-    const {
-      format = 'csv', // 'csv' or 'xlsx'
-      grade_id = null,
-      section_id = null,
-      search = '',
-      lrn = ''
-    } = req.query
-
-    // Build base where & params, similar to /api/students
     const where = ['st.is_deleted = 0', 'en.school_year_id = ?', "en.status = 'active'"]
-    const params = [currentSyId]
+    const params = [syId]
 
     if (grade_id) {
       where.push('en.grade_id = ?')
@@ -37,138 +36,70 @@ export default async function handler(req, res) {
       params.push(lrn)
     }
     if (search) {
-      where.push('(st.first_name LIKE ? OR st.last_name LIKE ? OR CONCAT(st.first_name, " ", st.last_name) LIKE ?)')
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`)
+      where.push('(st.first_name LIKE ? OR st.last_name LIKE ? OR CONCAT(st.first_name, " ", st.last_name) LIKE ? OR st.lrn LIKE ?)')
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
     }
 
-    // teacher restriction: only allow export of assigned sections
     if (session.user.role === 'teacher') {
       where.push(`en.section_id IN (
-        SELECT section_id
-        FROM teacher_sections
-        WHERE user_id = ?
-          AND (school_year_id = ? OR school_year_id IS NULL)
+        SELECT section_id FROM teacher_sections
+        WHERE user_id = ? AND school_year_id = ? AND is_active = 1
       )`)
-      params.push(session.user.id, currentSyId)
+      params.push(session.user.id, syId)
     }
 
-    const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
-
-    // We'll query in chunks using LIMIT/OFFSET
-    const CHUNK = 1000
-    let offset = 0
-
-    // SQL to fetch students with parents (GROUP_CONCAT)
     const sql = `
       SELECT
         st.id,
         st.lrn,
         st.first_name,
         st.last_name,
-        en.grade_id,
-        en.section_id,
         g.name AS grade_name,
-        s.name AS section_name,
-        GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) SEPARATOR '; ') AS parents
-      FROM students st
-      JOIN student_enrollments en ON en.student_id = st.id
+        sec.name AS section_name,
+        GROUP_CONCAT(DISTINCT CONCAT(p.first_name, ' ', p.last_name) ORDER BY p.last_name SEPARATOR '; ') AS parents
+      FROM student_enrollments en
+      JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
+      JOIN grades g ON g.id = en.grade_id
+      JOIN sections sec ON sec.id = en.section_id
       LEFT JOIN student_parents sp ON sp.student_id = st.id
       LEFT JOIN parents p ON p.id = sp.parent_id AND p.is_deleted = 0
-      LEFT JOIN grades g ON g.id = en.grade_id
-      LEFT JOIN sections s ON s.id = en.section_id
-      ${whereSql}
-      GROUP BY st.id, en.grade_id, en.section_id, g.name, s.name
-      ORDER BY st.last_name, st.first_name
-      LIMIT ? OFFSET ?
+      WHERE ${where.join(' AND ')}
+      GROUP BY st.id, st.lrn, st.first_name, st.last_name, g.name, sec.name
+      ORDER BY sec.name, st.last_name, st.first_name
     `
 
-    // CSV export
-    if (format === 'csv') {
+    if (fmt === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8')
-      res.setHeader('Content-Disposition', `attachment; filename=students_export.csv`)
+      res.setHeader('Content-Disposition', `attachment; filename="students_sy_${syId}.csv"`)
+      res.write(['lrn', 'last_name', 'first_name', 'grade', 'section', 'parents'].map(csv).join(',') + '\n')
 
-      // header row
-      const header = ['lrn', 'last_name', 'first_name', 'grade_name', 'section_name', 'parents']
-      res.write(header.join(',') + '\n')
-
-      while (true) {
-        const rows = (await db.query(sql, [...params, CHUNK, offset]))[0]
-        if (!rows || rows.length === 0) break
-
-        for (const r of rows) {
-          const vals = [
-            r.lrn ?? '',
-            r.last_name ?? '',
-            r.first_name ?? '',
-            r.grade_name ?? '',
-            r.section_name ?? '',
-            r.parents ?? ''
-          ].map(v => {
-            if (v === null || v === undefined) return ''
-            const s = String(v)
-
-            // escape if needed
-            if (s.includes('"') || s.includes(',') || s.includes('\n')) {
-              return `"${s.replace(/"/g, '""')}"`
-            }
-
-            return s
-          })
-          res.write(vals.join(',') + '\n')
-        }
-
-        offset += CHUNK
+      const [rows] = await db.query(sql, params)
+      for (const r of rows) {
+        res.write([r.lrn, r.last_name, r.first_name, r.grade_name, r.section_name, r.parents].map(csv).join(',') + '\n')
       }
-
       res.end()
 
       return
     }
 
-    // XLSX export
-    if (format === 'xlsx') {
+    if (fmt === 'xlsx') {
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      res.setHeader('Content-Disposition', `attachment; filename=students_export.xlsx`)
+      res.setHeader('Content-Disposition', `attachment; filename="students_sy_${syId}.xlsx"`)
 
       const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: res })
       const sheet = workbook.addWorksheet('Students')
-
-      // add header row
       sheet.addRow(['LRN', 'Last Name', 'First Name', 'Grade', 'Section', 'Parents']).commit()
 
-      while (true) {
-        const rows = (await db.query(sql, [...params, CHUNK, offset]))[0]
-        if (!rows || rows.length === 0) break
-
-        for (const r of rows) {
-          sheet
-            .addRow([
-              r.lrn ?? '',
-              r.last_name ?? '',
-              r.first_name ?? '',
-              r.grade_name ?? '',
-              r.section_name ?? '',
-              r.parents ?? ''
-            ])
-            .commit()
-        }
-
-        offset += CHUNK
-      }
-
+      const [rows] = await db.query(sql, params)
+      for (const r of rows) sheet.addRow([r.lrn, r.last_name, r.first_name, r.grade_name, r.section_name, r.parents]).commit()
       await workbook.commit()
 
-      // response will end when workbook finishes streaming
       return
     }
 
     return res.status(400).json({ message: 'Unsupported format' })
   } catch (err) {
     console.error('Export students error:', err)
-
-    // If headers already sent, attempt to end response
-    try {
-      if (!res.headersSent) res.status(500).json({ message: 'Internal server error' })
-    } catch (e) {}
+    if (!res.headersSent) return res.status(500).json({ message: 'Internal server error' })
   }
 }

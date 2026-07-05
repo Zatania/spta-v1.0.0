@@ -18,8 +18,17 @@ export default async function handler(req, res) {
 
     // Confirm assignment exists
     const [aaRows] = await db.query(
-      `SELECT id FROM activity_assignments WHERE activity_id = ? AND section_id = ? LIMIT 1`,
-      [activity_id, section_id]
+      `
+        SELECT aa.id
+        FROM activity_assignments aa
+        JOIN activities a ON a.id = aa.activity_id
+        WHERE aa.activity_id = ?
+          AND aa.section_id = ?
+          AND a.school_year_id = ?
+          AND a.is_deleted = 0
+        LIMIT 1
+      `,
+      [activity_id, section_id, currentSyId]
     )
     if (!aaRows || aaRows.length === 0) return res.status(200).json({ total: 0, students: [] })
     const assignmentId = aaRows[0].id
@@ -30,15 +39,17 @@ export default async function handler(req, res) {
 
     // Count total
     const countSql = `
+      SELECT COUNT(DISTINCT st.id) AS total
       FROM students st
-        JOIN student_enrollments en ON en.student_id = st.id
-        WHERE en.section_id = ?
-          AND en.school_year_id = ?
-          AND en.status = 'active'
-          AND st.is_deleted = 0 ${search ? ' ' + searchClause : ''}
+      JOIN student_enrollments en ON en.student_id = st.id
+      WHERE en.section_id = ?
+        AND en.school_year_id = ?
+        AND en.status = 'active'
+        AND st.is_deleted = 0
+        ${searchClause}
     `
     const [countRows] = await db.query(countSql, [section_id, currentSyId, ...searchParams])
-    const total = countRows[0]?.total ?? 0
+    const total = Number(countRows[0]?.total || 0)
 
     // Pagination calc
     const limit = Math.max(1, Math.min(500, Number(page_size) || 50))

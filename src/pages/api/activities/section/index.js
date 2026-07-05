@@ -8,28 +8,32 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
-  const session = await getServerSession(req, res, authOptions)
-  if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
-
-  const currentSyId = await getCurrentSchoolYearId()
-
-  if (session.user.role === 'teacher') {
-    const [ok] = await db.query(
-      `SELECT 1
-       FROM teacher_sections
-      WHERE user_id = ?
-        AND section_id = ?
-        AND (school_year_id = ? OR school_year_id IS NULL)
-      LIMIT 1`,
-      [session.user.id, section_id, currentSyId]
-    )
-    if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
-  }
 
   try {
-    const { section_id, from_date, to_date } = req.query
+    const session = await getServerSession(req, res, authOptions)
+    if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+    const { section_id, from_date, to_date, school_year_id } = req.query
     if (!section_id) {
       return res.status(400).json({ message: 'section_id is required' })
+    }
+
+    let syId = Number(school_year_id)
+    if (!Number.isFinite(syId) || syId <= 0) {
+      syId = await getCurrentSchoolYearId()
+    }
+
+    if (session.user.role === 'teacher') {
+      const [ok] = await db.query(
+        `SELECT 1
+         FROM teacher_sections
+         WHERE user_id = ?
+           AND section_id = ?
+           AND school_year_id = ?
+         LIMIT 1`,
+        [session.user.id, section_id, syId]
+      )
+      if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
     }
 
     // Build date filters against alias a.activity_date
@@ -92,7 +96,7 @@ export default async function handler(req, res) {
       ORDER BY a.activity_date DESC, a.created_at DESC
     `
 
-    const queryParams = [currentSyId, currentSyId, section_id, ...params]
+    const queryParams = [syId, syId, section_id, ...params]
     const [activities] = await db.query(sql, queryParams)
 
     const formatted = activities.map(a => ({

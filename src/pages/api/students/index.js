@@ -50,7 +50,7 @@ export default async function handler(req, res) {
              SELECT section_id
              FROM teacher_sections
              WHERE user_id = ?
-               AND (school_year_id = ? OR school_year_id IS NULL)
+               AND (school_year_id = ?)
            )`
         )
         params.push(session.user.id, currentSyId)
@@ -138,7 +138,7 @@ export default async function handler(req, res) {
       if (session.user.role === 'teacher') {
         const [ok] = await db.query(
           `SELECT 1 FROM teacher_sections
-           WHERE user_id = ? AND section_id = ? AND (school_year_id = ? OR school_year_id IS NULL)
+           WHERE user_id = ? AND section_id = ? AND (school_year_id = ?)
            LIMIT 1`,
           [session.user.id, section_id, currentSyId]
         )

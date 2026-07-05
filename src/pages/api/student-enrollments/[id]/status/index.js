@@ -39,7 +39,7 @@ export default async function handler(req, res) {
            FROM teacher_sections
           WHERE user_id = ?
             AND section_id = ?
-            AND (school_year_id = ? OR school_year_id IS NULL)
+            AND (school_year_id = ?)
           LIMIT 1`,
         [session.user.id, en.section_id, en.school_year_id]
       )

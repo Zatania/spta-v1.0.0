@@ -91,7 +91,7 @@ export default async function handler(req, res) {
         `SELECT COUNT(*) AS cnt
           FROM teacher_sections
           WHERE section_id = ?
-            AND (school_year_id = ? OR school_year_id IS NULL)`,
+            AND (school_year_id = ?)`,
         [sectionId, currentSyId]
       )
       if (tsRows[0].cnt > 0) blockers.push({ type: 'teacher_assignments', count: tsRows[0].cnt })

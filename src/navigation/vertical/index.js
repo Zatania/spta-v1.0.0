@@ -17,12 +17,20 @@ const navigation = () => {
       icon: 'mdi:file-document-outline',
       children: [
         {
+          title: 'School Years',
+          path: '/school-years'
+        },
+        {
           title: 'Teachers',
           path: '/teachers'
         },
         {
           title: 'Sections',
           path: '/sections'
+        },
+        {
+          title: 'Section Assignments',
+          path: '/section-assignments'
         },
         {
           title: 'Students',

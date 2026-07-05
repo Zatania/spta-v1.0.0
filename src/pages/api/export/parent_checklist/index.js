@@ -1,78 +1,77 @@
-// pages/api/export/parent_checklist.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
-import { getCurrentSchoolYearId } from '../../lib/schoolYear'
 import db from '../../db'
 import PDFDocument from 'pdfkit'
 
-/**
- * GET /api/export/parent_checklist?assignment_id=...
- * Returns a PDF with rows:
- *   Activity | Date | Student LRN | Student Name | Parent Signature (blank) | Remarks
- *
- * Permissions: admin or teacher assigned to the assignment.section
- */
 export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
-    const currentSyId = await getCurrentSchoolYearId()
-
     const assignmentId = Number(req.query.assignment_id)
-    if (!assignmentId) return res.status(400).json({ message: 'assignment_id is required' })
+    if (!Number.isInteger(assignmentId) || assignmentId <= 0) return res.status(400).json({ message: 'assignment_id is required' })
 
-    // verify assignment exists
-    const [assRows] = await db.query(
-      `
-      SELECT aa.id, aa.activity_id, aa.grade_id, aa.section_id, a.title, a.activity_date, g.name AS grade_name, s.name AS section_name
-      FROM activity_assignments aa
-      JOIN activities a ON a.id = aa.activity_id
-      JOIN grades g ON g.id = aa.grade_id
-      JOIN sections s ON s.id = aa.section_id
-      WHERE aa.id = ? LIMIT 1
-    `,
+    const [[assignment]] = await db.query(
+      `SELECT
+          aa.id,
+          aa.activity_id,
+          aa.grade_id,
+          aa.section_id,
+          a.school_year_id,
+          a.title,
+          DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
+          g.name AS grade_name,
+          s.name AS section_name
+         FROM activity_assignments aa
+         JOIN activities a ON a.id = aa.activity_id AND a.is_deleted = 0
+         JOIN grades g ON g.id = aa.grade_id
+         JOIN sections s ON s.id = aa.section_id
+        WHERE aa.id = ?
+        LIMIT 1`,
       [assignmentId]
     )
-    if (!assRows.length) return res.status(404).json({ message: 'Assignment not found' })
-    const ass = assRows[0]
+    if (!assignment) return res.status(404).json({ message: 'Assignment not found' })
 
     if (session.user.role === 'teacher') {
-      const [ok] = await db.query(
+      const [[ok]] = await db.query(
         `SELECT 1
-          FROM teacher_sections
+           FROM teacher_sections
           WHERE user_id = ?
             AND section_id = ?
-            AND (school_year_id = ? OR school_year_id IS NULL)
+            AND school_year_id = ?
+            AND is_active = 1
           LIMIT 1`,
-        [session.user.id, ass.section_id, currentSyId]
+        [session.user.id, assignment.section_id, assignment.school_year_id]
       )
-      if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
+      if (!ok) return res.status(403).json({ message: 'Forbidden' })
     }
 
-    // fetch students & parent names (one row per student; parent list can be shown on separate lines if multiple parents)
     const [rows] = await db.query(
-      `
-      SELECT st.id AS student_id, st.lrn, st.last_name, st.first_name,
-        p.id AS parent_id, p.first_name AS parent_first, p.last_name AS parent_last
-      FROM student_enrollments en
-      JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
-      LEFT JOIN student_parents sp ON sp.student_id = st.id
-      LEFT JOIN parents p ON p.id = sp.parent_id AND p.is_deleted = 0
-      WHERE en.school_year_id = ?
-        AND en.status = 'active'
-        AND en.grade_id = ?
-        AND en.section_id = ?
-      ORDER BY st.last_name, st.first_name
-    `,
-      [currentSyId, ass.grade_id, ass.section_id]
+      `SELECT
+          st.id AS student_id,
+          st.lrn,
+          st.last_name,
+          st.first_name,
+          p.id AS parent_id,
+          p.first_name AS parent_first,
+          p.last_name AS parent_last
+         FROM student_enrollments en
+         JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
+         LEFT JOIN student_parents sp ON sp.student_id = st.id
+         LEFT JOIN parents p ON p.id = sp.parent_id AND p.is_deleted = 0
+        WHERE en.school_year_id = ?
+          AND en.status = 'active'
+          AND en.grade_id = ?
+          AND en.section_id = ?
+        ORDER BY st.last_name, st.first_name, p.last_name`,
+      [assignment.school_year_id, assignment.grade_id, assignment.section_id]
     )
 
-    // group parents per student
     const map = new Map()
     for (const r of rows) {
-      if (!map.has(r.student_id))
+      if (!map.has(r.student_id)) {
         map.set(r.student_id, { lrn: r.lrn, name: `${r.last_name}, ${r.first_name}`, parents: [] })
+      }
       if (r.parent_id) map.get(r.student_id).parents.push(`${r.parent_last}, ${r.parent_first}`)
     }
 
@@ -82,40 +81,28 @@ export default async function handler(req, res) {
     const doc = new PDFDocument({ margin: 40, size: 'A4' })
     doc.pipe(res)
 
-    // Header
     doc.fontSize(16).text('Parent Attendance Checklist', { align: 'center' })
     doc.moveDown()
-    doc.fontSize(12).text(`Activity: ${ass.title}`)
-    doc.text(`Date: ${ass.activity_date}`)
-    doc.text(`Grade: ${ass.grade_name}  •  Section: ${ass.section_name}`)
+    doc.fontSize(12).text(`Activity: ${assignment.title}`)
+    doc.text(`Date: ${assignment.activity_date}`)
+    doc.text(`Grade/Section: ${assignment.grade_name} - ${assignment.section_name}`)
     doc.moveDown(0.5)
 
-    // Table header
-    const startX = doc.x
-    doc.fontSize(10).text('LRN', startX, doc.y, { width: 80, continued: true })
-    doc.text('Student Name', { continued: true, width: 220 })
-    doc.text('Parent(s)', { continued: true, width: 180 })
+    doc.fontSize(10).text('LRN', { continued: true, width: 90 })
+    doc.text('Student Name', { continued: true, width: 190 })
+    doc.text('Parent(s)', { continued: true, width: 170 })
     doc.text('Parent Signature', { width: 120 })
     doc.moveDown(0.5)
 
-    // rows: print 1 student per line, but if multiple parents we print them in the same parents cell separated by semicolons
-    for (const [studentId, info] of map.entries()) {
-      doc.fontSize(10).text(info.lrn || '', { continued: true, width: 80 })
-      doc.text(info.name, { continued: true, width: 220 })
-      doc.text(info.parents.join('; ') || '', { continued: true, width: 180 })
-
-      // Signature line (blank)
-      const sigX = doc.x
-      const sigY = doc.y
-      doc.moveDown(0.6)
-      doc
-        .moveTo(sigX - 5, sigY + 8)
-        .lineTo(sigX + 110, sigY + 8)
-        .stroke()
-      doc.moveDown(0.2)
-
-      // small space before next row
-      doc.moveDown(0.1)
+    for (const info of map.values()) {
+      doc.text(info.lrn || '', { continued: true, width: 90 })
+      doc.text(info.name, { continued: true, width: 190 })
+      doc.text(info.parents.join('; ') || '', { continued: true, width: 170 })
+      const y = doc.y
+      const x = doc.x
+      doc.moveTo(x, y + 8).lineTo(x + 110, y + 8).stroke()
+      doc.moveDown(1)
+      if (doc.y > doc.page.height - 60) doc.addPage()
     }
 
     doc.end()

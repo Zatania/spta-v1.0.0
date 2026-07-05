@@ -1,4 +1,3 @@
-// pages/admin/sections.js
 import { useEffect, useState } from 'react'
 import {
   Box,
@@ -13,16 +12,22 @@ import {
   Tooltip,
   Alert,
   InputAdornment,
-  CircularProgress
+  CircularProgress,
+  Chip,
+  Stack,
+  Typography
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
-import { DataGrid } from '@mui/x-data-grid'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import AssignmentIndIcon from '@mui/icons-material/AssignmentInd'
+import { DataGrid } from '@mui/x-data-grid'
 import axios from 'axios'
+import SchoolYearSelect from 'src/components/common/SchoolYearSelect'
 
 export default function SectionsPage() {
+  const [schoolYearId, setSchoolYearId] = useState('')
   const [sections, setSections] = useState([])
   const [grades, setGrades] = useState([])
   const [loading, setLoading] = useState(false)
@@ -32,7 +37,6 @@ export default function SectionsPage() {
   const [form, setForm] = useState({ id: null, grade_id: '', name: '' })
   const [saving, setSaving] = useState(false)
 
-  // Filters & Pagination
   const [search, setSearch] = useState('')
   const [filterGrade, setFilterGrade] = useState('')
   const [filterAssigned, setFilterAssigned] = useState('')
@@ -40,12 +44,14 @@ export default function SectionsPage() {
   const [rowCount, setRowCount] = useState(0)
 
   const fetchSections = async () => {
+    if (!schoolYearId) return
     setLoading(true)
     setError(null)
     try {
       const { data } = await axios.get('/api/sections', {
         params: {
-          search,
+          school_year_id: schoolYearId,
+          search: search || undefined,
           grade_id: filterGrade || undefined,
           assigned: filterAssigned || undefined,
           page: paginationModel.page + 1,
@@ -71,33 +77,25 @@ export default function SectionsPage() {
   }
 
   useEffect(() => {
-    fetchSections()
-  }, [search, filterGrade, filterAssigned, paginationModel])
-
-  useEffect(() => {
     fetchGrades()
   }, [])
 
+  useEffect(() => {
+    fetchSections()
+  }, [schoolYearId, search, filterGrade, filterAssigned, paginationModel])
+
   const handleOpen = (row = null) => {
-    if (row) {
-      setForm({ id: row.id, grade_id: row.grade_id, name: row.section_name })
-    } else {
-      setForm({ id: null, grade_id: '', name: '' })
-    }
+    if (row) setForm({ id: row.id, grade_id: row.grade_id, name: row.section_name })
+    else setForm({ id: null, grade_id: '', name: '' })
     setOpen(true)
   }
-
-  const handleClose = () => setOpen(false)
 
   const handleSave = async () => {
     if (!form.grade_id || !form.name) return
     setSaving(true)
     try {
-      if (form.id) {
-        await axios.put(`/api/sections/${form.id}`, { grade_id: form.grade_id, name: form.name })
-      } else {
-        await axios.post('/api/sections', { grade_id: form.grade_id, name: form.name })
-      }
+      if (form.id) await axios.put(`/api/sections/${form.id}`, { grade_id: form.grade_id, name: form.name })
+      else await axios.post('/api/sections', { grade_id: form.grade_id, name: form.name })
       await fetchSections()
       setOpen(false)
     } catch (err) {
@@ -118,23 +116,40 @@ export default function SectionsPage() {
   }
 
   const columns = [
-    { field: 'grade_name', headerName: 'Grade', flex: 1 },
-    { field: 'section_name', headerName: 'Section', flex: 2 },
+    { field: 'grade_name', headerName: 'Grade', flex: 0.8, minWidth: 120 },
+    { field: 'section_name', headerName: 'Section', flex: 1.2, minWidth: 160 },
+    {
+      field: 'assigned_teacher',
+      headerName: 'Teacher Assignment',
+      flex: 1.5,
+      minWidth: 220,
+      renderCell: params =>
+        params.row.assigned_teacher ? (
+          <Chip size='small' color='success' label={params.row.assigned_teacher.full_name} />
+        ) : (
+          <Chip size='small' color='warning' label='Unassigned' />
+        )
+    },
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 140,
+      width: 170,
       sortable: false,
       filterable: false,
       renderCell: params => (
         <>
-          <Tooltip title='Edit'>
+          <Tooltip title='Edit Section Name/Grade'>
             <IconButton size='small' onClick={() => handleOpen(params.row)}>
               <EditIcon fontSize='small' />
             </IconButton>
           </Tooltip>
+          <Tooltip title='Manage Teacher Assignment'>
+            <IconButton size='small' color='primary' onClick={() => (window.location.href = '/section-assignments')}>
+              <AssignmentIndIcon fontSize='small' />
+            </IconButton>
+          </Tooltip>
           <Tooltip title='Delete'>
-            <IconButton size='small' onClick={() => handleDelete(params.row.id)}>
+            <IconButton size='small' color='error' onClick={() => handleDelete(params.row.id)}>
               <DeleteIcon fontSize='small' />
             </IconButton>
           </Tooltip>
@@ -145,12 +160,26 @@ export default function SectionsPage() {
 
   return (
     <Box p={3}>
-      <Box display='flex' gap={2} alignItems='center' mb={2} flexWrap='wrap'>
+      <Stack direction='row' justifyContent='space-between' alignItems='center' mb={2} gap={2} flexWrap='wrap'>
+        <Box>
+          <Typography variant='h5'>Sections</Typography>
+          <Typography variant='body2' color='text.secondary'>
+            Sections can exist even when no teacher is currently assigned.
+          </Typography>
+        </Box>
+        <Button startIcon={<AddIcon />} variant='contained' onClick={() => handleOpen()}>
+          Add Section
+        </Button>
+      </Stack>
+
+      <Stack direction='row' gap={2} alignItems='center' mb={2} flexWrap='wrap'>
+        <SchoolYearSelect value={schoolYearId} onChange={setSchoolYearId} />
         <TextField
           size='small'
-          placeholder='Search'
+          placeholder='Search section, grade, or teacher'
           value={search}
           onChange={e => {
+            setPaginationModel({ ...paginationModel, page: 0 })
             setSearch(e.target.value)
           }}
           InputProps={{
@@ -168,12 +197,14 @@ export default function SectionsPage() {
           label='Grade'
           value={filterGrade}
           onChange={e => {
+            setPaginationModel({ ...paginationModel, page: 0 })
             setFilterGrade(e.target.value)
           }}
+          sx={{ minWidth: 160 }}
         >
           <MenuItem value=''>All Grades</MenuItem>
           {grades.map(g => (
-            <MenuItem key={g.id} value={g.id}>
+            <MenuItem key={g.id} value={String(g.id)}>
               {g.name}
             </MenuItem>
           ))}
@@ -181,22 +212,19 @@ export default function SectionsPage() {
         <TextField
           select
           size='small'
-          label='Assigned'
+          label='Teacher Status'
           value={filterAssigned}
           onChange={e => {
+            setPaginationModel({ ...paginationModel, page: 0 })
             setFilterAssigned(e.target.value)
           }}
-          sx={{ minWidth: 160 }}
+          sx={{ minWidth: 170 }}
         >
           <MenuItem value=''>All</MenuItem>
           <MenuItem value='1'>Assigned</MenuItem>
           <MenuItem value='0'>Unassigned</MenuItem>
         </TextField>
-        <Box sx={{ flexGrow: 1 }} />
-        <Button startIcon={<AddIcon />} variant='contained' onClick={() => handleOpen()}>
-          Add Section
-        </Button>
-      </Box>
+      </Stack>
 
       {loading ? (
         <Box display='flex' justifyContent='center' p={4}>
@@ -205,46 +233,35 @@ export default function SectionsPage() {
       ) : error ? (
         <Alert severity='error'>{error}</Alert>
       ) : (
-        <div style={{ width: '100%' }}>
-          <DataGrid
-            rows={sections}
-            columns={columns}
-            autoHeight
-            rowCount={rowCount}
-            paginationMode='server'
-            paginationModel={paginationModel}
-            onPaginationModelChange={model => setPaginationModel(model)}
-            pageSizeOptions={[10, 25, 50]}
-            getRowId={r => r.id}
-          />
-        </div>
+        <DataGrid
+          rows={sections}
+          columns={columns}
+          autoHeight
+          rowCount={rowCount}
+          paginationMode='server'
+          paginationModel={paginationModel}
+          onPaginationModelChange={setPaginationModel}
+          pageSizeOptions={[10, 25, 50]}
+          getRowId={r => r.id}
+        />
       )}
 
-      <Dialog open={open} onClose={handleClose}>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth='sm' fullWidth>
         <DialogTitle>{form.id ? 'Edit Section' : 'Add Section'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-          <TextField
-            select
-            label='Grade'
-            value={form.grade_id}
-            onChange={e => setForm({ ...form, grade_id: e.target.value })}
-          >
+          <Alert severity='info'>Teacher assignment is managed on the Section Assignments page.</Alert>
+          <TextField select label='Grade' value={form.grade_id} onChange={e => setForm({ ...form, grade_id: e.target.value })}>
+            <MenuItem value=''>-- Select Grade --</MenuItem>
             {grades.map(g => (
-              <MenuItem key={g.id} value={g.id}>
+              <MenuItem key={g.id} value={String(g.id)}>
                 {g.name}
               </MenuItem>
             ))}
           </TextField>
-
-          <TextField
-            label='Section Name'
-            value={form.name}
-            onChange={e => setForm({ ...form, name: e.target.value })}
-          />
+          <TextField label='Section Name' value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
         </DialogContent>
-
         <DialogActions>
-          <Button onClick={handleClose}>Cancel</Button>
+          <Button onClick={() => setOpen(false)}>Cancel</Button>
           <Button variant='contained' onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
           </Button>

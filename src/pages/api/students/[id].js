@@ -111,7 +111,7 @@ export default async function handler(req, res) {
         // If moving sections, also ensure teacher owns the new section
         const [okNew] = await db.query(
           `SELECT 1 FROM teacher_sections
-           WHERE user_id = ? AND section_id = ? AND (school_year_id = ? OR school_year_id IS NULL)
+           WHERE user_id = ? AND section_id = ? AND (school_year_id = ?)
            LIMIT 1`,
           [session.user.id, section_id, currentSyId]
         )

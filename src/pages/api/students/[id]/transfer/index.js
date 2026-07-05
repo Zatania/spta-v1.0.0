@@ -36,7 +36,7 @@ export default async function handler(req, res) {
       // must own target section too
       const [okTarget] = await db.query(
         `SELECT 1 FROM teacher_sections
-         WHERE user_id = ? AND section_id = ? AND (school_year_id = ? OR school_year_id IS NULL)
+         WHERE user_id = ? AND section_id = ? AND (school_year_id = ?)
          LIMIT 1`,
         [session.user.id, to_section_id, syId]
       )

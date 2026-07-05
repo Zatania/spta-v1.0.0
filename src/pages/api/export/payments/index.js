@@ -1,6 +1,7 @@
 // pages/api/export/payments.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
+import { getCurrentSchoolYearId } from '../../lib/schoolYear'
 import db from '../../db'
 import ExcelJS from 'exceljs'
 import PDFDocument from 'pdfkit'
@@ -20,46 +21,68 @@ export default async function handler(req, res) {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
+    const currentSyId = await getCurrentSchoolYearId()
+
     const { format = 'csv', activity_assignment_id, activity_id, grade_id, section_id } = req.query
     const fmt = String(format).toLowerCase()
 
     // permission checks similar to attendance
-    if (session.user.role === 'teacher' && activity_assignment_id) {
-      const [assRows] = await db.query('SELECT section_id FROM activity_assignments WHERE id = ? LIMIT 1', [
-        activity_assignment_id
-      ])
-      if (!assRows.length) return res.status(404).json({ message: 'Assignment not found' })
-      const sectionId = assRows[0].section_id
+    const where = ['a.is_deleted = 0', 'en.school_year_id = ?', "en.status = 'active'"]
+    const params = [currentSyId]
 
-      const [ok] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-        session.user.id,
-        sectionId
-      ])
-      if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
+    if (activity_assignment_id) {
+      where.push('aa.id = ?')
+      params.push(activity_assignment_id)
+    }
+    if (activity_id) {
+      where.push('aa.activity_id = ?')
+      params.push(activity_id)
+    }
+    if (grade_id) {
+      where.push('aa.grade_id = ?')
+      params.push(grade_id)
+    }
+    if (section_id) {
+      where.push('aa.section_id = ?')
+      params.push(section_id)
+    }
+
+    if (session.user.role === 'teacher') {
+      where.push(`aa.section_id IN (
+        SELECT section_id
+        FROM teacher_sections
+        WHERE user_id = ?
+          AND (school_year_id = ? OR school_year_id IS NULL)
+      )`)
+      params.push(session.user.id, currentSyId)
     }
 
     const sql = `
       SELECT aa.id AS assignment_id, a.title AS activity_title, a.activity_date,
         aa.grade_id, g.name AS grade_name, aa.section_id, s.name AS section_name,
         st.id AS student_id, st.lrn, st.first_name, st.last_name,
-        pmt.id AS payment_id, pmt.paid AS payment_paid, pmt.payment_date, pmt.marked_by AS payment_marked_by, pmt.marked_at
+        pmt.id AS payment_id, pmt.paid AS payment_paid, pmt.payment_date,
+        pmt.marked_by AS payment_marked_by, pmt.marked_at
       FROM activity_assignments aa
-      JOIN activities a ON a.id = aa.activity_id AND a.is_deleted = 0
+      JOIN activities a ON a.id = aa.activity_id
       JOIN grades g ON g.id = aa.grade_id
       JOIN sections s ON s.id = aa.section_id
-      JOIN students st ON st.grade_id = aa.grade_id AND st.section_id = aa.section_id AND st.is_deleted = 0
-      LEFT JOIN payments pmt ON pmt.activity_assignment_id = aa.id AND pmt.student_id = st.id
-      WHERE 1=1
-      ${activity_assignment_id ? ' AND aa.id = ' + db.escape(activity_assignment_id) : ''}
-      ${activity_id ? ' AND aa.activity_id = ' + db.escape(activity_id) : ''}
-      ${grade_id ? ' AND aa.grade_id = ' + db.escape(grade_id) : ''}
-      ${section_id ? ' AND aa.section_id = ' + db.escape(section_id) : ''}
-      ORDER BY aa.activity_date DESC, aa.section_id, st.last_name, st.first_name
+      JOIN student_enrollments en
+        ON en.grade_id = aa.grade_id
+      AND en.section_id = aa.section_id
+      JOIN students st
+        ON st.id = en.student_id
+      AND st.is_deleted = 0
+      LEFT JOIN payments pmt
+        ON pmt.activity_assignment_id = aa.id
+      AND pmt.student_id = st.id
+      WHERE ${where.join(' AND ')}
+      ORDER BY a.activity_date DESC, aa.section_id, st.last_name, st.first_name
     `
 
     const conn = await db.getConnection()
     try {
-      const queryStream = conn.query(sql).stream({ highWaterMark: 5 })
+      const queryStream = conn.query(sql, params).stream({ highWaterMark: 5 })
 
       if (fmt === 'csv') {
         res.setHeader('Content-Type', 'text/csv; charset=utf-8')

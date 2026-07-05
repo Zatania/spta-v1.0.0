@@ -1,6 +1,7 @@
 // pages/api/export/activity.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
+import { getCurrentSchoolYearId } from '../../lib/schoolYear'
 import db from '../../db'
 import ExcelJS from 'exceljs'
 import PDFDocument from 'pdfkit'
@@ -12,6 +13,7 @@ export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+    const currentSyId = await getCurrentSchoolYearId()
 
     const { activity_id, section_id = null, format = 'csv', search = '' } = req.query
     if (!activity_id) return res.status(400).json({ message: 'activity_id is required' })
@@ -68,20 +70,29 @@ export default async function handler(req, res) {
             GROUP_CONCAT(CONCAT(pa.first_name,' ',pa.last_name) SEPARATOR '; ') AS parents,
             att.status AS attendance_status, att.parent_present,
             pay.paid, pay.payment_date
-          FROM students st
+          FROM student_enrollments en
+          JOIN students st
+            ON st.id = en.student_id
+          AND st.is_deleted = 0
           LEFT JOIN student_parents sp ON sp.student_id = st.id
-          LEFT JOIN parents pa ON pa.id = sp.parent_id
-          LEFT JOIN attendance att ON att.student_id = st.id AND att.activity_assignment_id IN (?)
-          LEFT JOIN payments pay ON pay.student_id = st.id AND pay.activity_assignment_id IN (?)
-          WHERE st.is_deleted = 0 AND st.section_id IN (
-            SELECT section_id FROM activity_assignments WHERE activity_id = ?
-          )
+          LEFT JOIN parents pa ON pa.id = sp.parent_id AND pa.is_deleted = 0
+          LEFT JOIN attendance att
+            ON att.student_id = st.id
+          AND att.activity_assignment_id IN (?)
+          LEFT JOIN payments pay
+            ON pay.student_id = st.id
+          AND pay.activity_assignment_id IN (?)
+          WHERE en.school_year_id = ?
+            AND en.status = 'active'
+            AND en.section_id IN (
+              SELECT section_id FROM activity_assignments WHERE activity_id = ?
+            )
           ${search ? `AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)` : ''}
           GROUP BY st.id
           ORDER BY st.last_name, st.first_name
           LIMIT ? OFFSET ?
         `
-        const params = [assignmentIds, assignmentIds, activity_id]
+        const params = [assignmentIds, assignmentIds, currentSyId, activity_id]
         if (search) params.push(`%${search}%`, `%${search}%`, `%${search}%`)
         params.push(CHUNK, offset)
         const [rows] = await db.query(sql, params)
@@ -144,20 +155,29 @@ export default async function handler(req, res) {
             GROUP_CONCAT(CONCAT(pa.first_name,' ',pa.last_name) SEPARATOR '; ') AS parents,
             att.status AS attendance_status, att.parent_present,
             pay.paid, pay.payment_date
-          FROM students st
+          FROM student_enrollments en
+          JOIN students st
+            ON st.id = en.student_id
+          AND st.is_deleted = 0
           LEFT JOIN student_parents sp ON sp.student_id = st.id
-          LEFT JOIN parents pa ON pa.id = sp.parent_id
-          LEFT JOIN attendance att ON att.student_id = st.id AND att.activity_assignment_id IN (?)
-          LEFT JOIN payments pay ON pay.student_id = st.id AND pay.activity_assignment_id IN (?)
-          WHERE st.is_deleted = 0 AND st.section_id IN (
-            SELECT section_id FROM activity_assignments WHERE activity_id = ?
-          )
+          LEFT JOIN parents pa ON pa.id = sp.parent_id AND pa.is_deleted = 0
+          LEFT JOIN attendance att
+            ON att.student_id = st.id
+          AND att.activity_assignment_id IN (?)
+          LEFT JOIN payments pay
+            ON pay.student_id = st.id
+          AND pay.activity_assignment_id IN (?)
+          WHERE en.school_year_id = ?
+            AND en.status = 'active'
+            AND en.section_id IN (
+              SELECT section_id FROM activity_assignments WHERE activity_id = ?
+            )
           ${search ? `AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)` : ''}
           GROUP BY st.id
           ORDER BY st.last_name, st.first_name
           LIMIT ? OFFSET ?
         `
-        const params = [assignmentIds, assignmentIds, activity_id]
+        const params = [assignmentIds, assignmentIds, currentSyId, activity_id]
         if (search) params.push(`%${search}%`, `%${search}%`, `%${search}%`)
         params.push(CHUNK, offset)
         const [rows] = await db.query(sql, params)
@@ -219,20 +239,29 @@ export default async function handler(req, res) {
             GROUP_CONCAT(CONCAT(pa.first_name,' ',pa.last_name) SEPARATOR '; ') AS parents,
             att.status AS attendance_status, att.parent_present,
             pay.paid, pay.payment_date
-          FROM students st
+          FROM student_enrollments en
+          JOIN students st
+            ON st.id = en.student_id
+          AND st.is_deleted = 0
           LEFT JOIN student_parents sp ON sp.student_id = st.id
-          LEFT JOIN parents pa ON pa.id = sp.parent_id
-          LEFT JOIN attendance att ON att.student_id = st.id AND att.activity_assignment_id IN (?)
-          LEFT JOIN payments pay ON pay.student_id = st.id AND pay.activity_assignment_id IN (?)
-          WHERE st.is_deleted = 0 AND st.section_id IN (
-            SELECT section_id FROM activity_assignments WHERE activity_id = ?
-          )
+          LEFT JOIN parents pa ON pa.id = sp.parent_id AND pa.is_deleted = 0
+          LEFT JOIN attendance att
+            ON att.student_id = st.id
+          AND att.activity_assignment_id IN (?)
+          LEFT JOIN payments pay
+            ON pay.student_id = st.id
+          AND pay.activity_assignment_id IN (?)
+          WHERE en.school_year_id = ?
+            AND en.status = 'active'
+            AND en.section_id IN (
+              SELECT section_id FROM activity_assignments WHERE activity_id = ?
+            )
           ${search ? `AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)` : ''}
           GROUP BY st.id
           ORDER BY st.last_name, st.first_name
           LIMIT ? OFFSET ?
         `
-        const params = [assignmentIds, assignmentIds, activity_id]
+        const params = [assignmentIds, assignmentIds, currentSyId, activity_id]
         if (search) params.push(`%${search}%`, `%${search}%`, `%${search}%`)
         params.push(CHUNK, offset)
         const [rows] = await db.query(sql, params)

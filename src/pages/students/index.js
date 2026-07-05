@@ -80,6 +80,7 @@ export default function StudentsPage() {
     section_id: '',
     teacher_id: '',
     parent_id: '',
+    parent_relation: '',
     picture: null,
     picture_preview: null
   }
@@ -456,6 +457,7 @@ export default function StudentsPage() {
         teacher_id: String(stu.teacher_id ?? ''),
         parent_id: primaryParent?.id ? String(primaryParent.id) : '',
         parent: primaryParent, // <-- keep the whole object for Autocomplete stability
+        parent_relation: primaryParent?.relation || '',
         picture: null,
         picture_preview: stu.picture_url || null
       }
@@ -495,6 +497,7 @@ export default function StudentsPage() {
       formData.append('section_id', form.section_id)
       formData.append('teacher_id', form.teacher_id)
       formData.append('parent_id', form.parent_id)
+      formData.append('parent_relation', form.parent_relation || '')
 
       if (form.picture) {
         formData.append('picture', form.picture)
@@ -548,8 +551,20 @@ export default function StudentsPage() {
 
       // Refresh and try to center the new parent by searching its name
       const q = `${parentForm.last_name} ${parentForm.first_name}`.trim()
-      await fetchParents(q)
-      const created = (listResp?.parents || []).find(p => String(p.id) === String(newParentId)) || null
+
+      const listResp = await axios.get('/api/parents', {
+        params: { search: q, page_size: 20 }
+      })
+      const refreshedParents = listResp.data?.parents ?? []
+      setParents(refreshedParents)
+
+      const created = refreshedParents.find(p => String(p.id) === String(newParentId)) || {
+        id: newParentId,
+        first_name: parentForm.first_name,
+        last_name: parentForm.last_name,
+        contact_info: parentForm.contact_info,
+        relations: parentForm.relation ? [parentForm.relation] : []
+      }
 
       // Auto-select the newly created parent
       setForm(prev => ({
@@ -565,6 +580,8 @@ export default function StudentsPage() {
         contact_info: '',
         relation: ''
       })
+
+      parent_relation: parentForm.relation || ''
     } catch (err) {
       console.error('Failed to create parent', err)
       alert(err?.response?.data?.message ?? 'Failed to create parent')

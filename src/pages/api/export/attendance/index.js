@@ -1,6 +1,7 @@
 // pages/api/export/attendance.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]' // adjust
+import { getCurrentSchoolYearId } from '../../lib/schoolYear'
 import db from '../../db' // adjust
 import ExcelJS from 'exceljs'
 import PDFDocument from 'pdfkit'
@@ -28,16 +29,18 @@ export default async function handler(req, res) {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
+    const currentSyId = await getCurrentSchoolYearId()
+
     const { format = 'csv', activity_assignment_id, activity_id, grade_id, section_id } = req.query
     const fmt = String(format).toLowerCase()
 
     // Permission checks: if teacher, limit by their sections
-    let where = ['st.is_deleted = 0']
-    const params = []
+    let where = ['st.is_deleted = 0', 'en.school_year_id = ?', "en.status = 'active'"]
+    const params = [currentSyId]
 
     let assignmentFilter = ''
     if (activity_assignment_id) {
-      where.push('atbl.activity_assignment_id = ?')
+      where.push('aa.id = ?')
       params.push(activity_assignment_id)
       assignmentFilter = `AND aa.id = ${db.escape(activity_assignment_id)}`
     } else {
@@ -59,10 +62,10 @@ export default async function handler(req, res) {
     if (session.user.role === 'teacher') {
       // if section_id present ensure teacher has that section
       if (section_id) {
-        const [ok] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-          session.user.id,
-          section_id
-        ])
+        const [ok] = await db.query(
+          `SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? AND (school_year_id = ? OR school_year_id IS NULL) LIMIT 1`,
+          [session.user.id, section_id, currentSyId]
+        )
         if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
       } else if (activity_assignment_id) {
         // verify assignment belongs to their section
@@ -72,10 +75,10 @@ export default async function handler(req, res) {
         if (!assRows.length) return res.status(404).json({ message: 'Assignment not found' })
         const sectionId = assRows[0].section_id
 
-        const [ok] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-          session.user.id,
-          sectionId
-        ])
+        const [ok] = await db.query(
+          'SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? AND (school_year_id = ? OR school_year_id IS NULL) LIMIT 1',
+          [session.user.id, sectionId, currentSyId]
+        )
         if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
       } else {
         // no section filter - teacher can export only for their sections.
@@ -96,11 +99,16 @@ export default async function handler(req, res) {
       JOIN activities a ON a.id = aa.activity_id AND a.is_deleted = 0
       JOIN grades g ON g.id = aa.grade_id
       JOIN sections s ON s.id = aa.section_id
-      JOIN students st ON st.grade_id = aa.grade_id AND st.section_id = aa.section_id AND st.is_deleted = 0
+      JOIN student_enrollments en
+        ON en.grade_id = aa.grade_id
+      AND en.section_id = aa.section_id
+      JOIN students st
+        ON st.id = en.student_id
+      AND st.is_deleted = 0
       LEFT JOIN attendance att ON att.activity_assignment_id = aa.id AND att.student_id = st.id
       LEFT JOIN payments pmt ON pmt.activity_assignment_id = aa.id AND pmt.student_id = st.id
       WHERE ${where.join(' AND ')}
-      ORDER BY aa.activity_date DESC, aa.section_id, st.last_name, st.first_name
+      ORDER BY a.activity_date DESC, aa.section_id, st.last_name, st.first_name
     `
 
     // Use a DB connection and stream rows

@@ -1,6 +1,7 @@
 // pages/api/parents/[id].js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]'
+import { getCurrentSchoolYearId } from '../lib/schoolYear'
 import db from '../db'
 
 export default async function handler(req, res) {
@@ -20,12 +21,30 @@ export default async function handler(req, res) {
       if (!rows.length) return res.status(404).json({ message: 'Parent not found' })
 
       // also list their students
+      const currentSyId = await getCurrentSchoolYearId()
+
       const [students] = await db.query(
-        `SELECT st.id, st.first_name, st.last_name, st.lrn, st.grade_id, st.section_id
-         FROM students st
-         JOIN student_parents sp ON sp.student_id = st.id
-         WHERE sp.parent_id = ? AND st.is_deleted = 0`,
-        [parentId]
+        `SELECT
+            st.id,
+            st.first_name,
+            st.last_name,
+            st.lrn,
+            en.grade_id,
+            en.section_id,
+            g.name AS grade_name,
+            sec.name AS section_name,
+            sp.relation
+        FROM students st
+        JOIN student_parents sp ON sp.student_id = st.id
+        JOIN student_enrollments en
+          ON en.student_id = st.id
+          AND en.school_year_id = ?
+        LEFT JOIN grades g ON g.id = en.grade_id
+        LEFT JOIN sections sec ON sec.id = en.section_id
+        WHERE sp.parent_id = ?
+          AND st.is_deleted = 0
+        ORDER BY st.last_name, st.first_name`,
+        [currentSyId, parentId]
       )
       const parent = rows[0]
       parent.students = students

@@ -2,12 +2,15 @@
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
 import db from '../../db' // adjust path if needed
+import { getCurrentSchoolYearId } from '../../lib/schoolYear'
 import ExcelJS from 'exceljs'
 
 export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+    const currentSyId = await getCurrentSchoolYearId()
 
     const {
       format = 'csv', // 'csv' or 'xlsx'
@@ -18,15 +21,15 @@ export default async function handler(req, res) {
     } = req.query
 
     // Build base where & params, similar to /api/students
-    const where = ['st.is_deleted = 0']
-    const params = []
+    const where = ['st.is_deleted = 0', 'en.school_year_id = ?', "en.status = 'active'"]
+    const params = [currentSyId]
 
     if (grade_id) {
-      where.push('st.grade_id = ?')
+      where.push('en.grade_id = ?')
       params.push(grade_id)
     }
     if (section_id) {
-      where.push('st.section_id = ?')
+      where.push('en.section_id = ?')
       params.push(section_id)
     }
     if (lrn) {
@@ -40,8 +43,13 @@ export default async function handler(req, res) {
 
     // teacher restriction: only allow export of assigned sections
     if (session.user.role === 'teacher') {
-      where.push('st.section_id IN (SELECT section_id FROM teacher_sections WHERE user_id = ?)')
-      params.push(session.user.id)
+      where.push(`en.section_id IN (
+        SELECT section_id
+        FROM teacher_sections
+        WHERE user_id = ?
+          AND (school_year_id = ? OR school_year_id IS NULL)
+      )`)
+      params.push(session.user.id, currentSyId)
     }
 
     const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
@@ -57,18 +65,19 @@ export default async function handler(req, res) {
         st.lrn,
         st.first_name,
         st.last_name,
-        st.grade_id,
-        st.section_id,
+        en.grade_id,
+        en.section_id,
         g.name AS grade_name,
         s.name AS section_name,
         GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) SEPARATOR '; ') AS parents
       FROM students st
+      JOIN student_enrollments en ON en.student_id = st.id
       LEFT JOIN student_parents sp ON sp.student_id = st.id
       LEFT JOIN parents p ON p.id = sp.parent_id AND p.is_deleted = 0
-      LEFT JOIN grades g ON g.id = st.grade_id
-      LEFT JOIN sections s ON s.id = st.section_id
+      LEFT JOIN grades g ON g.id = en.grade_id
+      LEFT JOIN sections s ON s.id = en.section_id
       ${whereSql}
-      GROUP BY st.id
+      GROUP BY st.id, en.grade_id, en.section_id, g.name, s.name
       ORDER BY st.last_name, st.first_name
       LIMIT ? OFFSET ?
     `

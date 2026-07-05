@@ -8,6 +8,7 @@ export default async function handler(req, res) {
   const { id } = req.query
   const assignmentId = Number(id)
   if (!assignmentId) return res.status(400).json({ message: 'Invalid assignment id' })
+  if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
 
   try {
     const session = await getServerSession(req, res, authOptions)
@@ -24,7 +25,7 @@ export default async function handler(req, res) {
               a.payments_enabled, a.fee_type, a.fee_amount
          FROM activity_assignments aa
          JOIN activities a ON a.id = aa.activity_id
-        WHERE aa.id = ?
+        WHERE aa.id = ? AND a.is_deleted = 0
         LIMIT 1`,
       [assignmentId]
     )

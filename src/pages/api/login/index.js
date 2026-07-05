@@ -1,5 +1,6 @@
 // pages/api/login.js
 import * as bcrypt from 'bcryptjs'
+import { getCurrentSchoolYearId } from '../lib/schoolYear'
 import db from '../db' // adjust path to your DB helper
 
 /**
@@ -45,13 +46,17 @@ const getUserRole = async userId => {
 }
 
 const getTeacherSections = async userId => {
+  const currentSyId = await getCurrentSchoolYearId()
+
   const sql = `
-    SELECT s.id, s.name AS section_name, s.grade_id
+    SELECT s.id, s.name AS section_name, s.grade_id, g.name AS grade_name
     FROM teacher_sections ts
-    JOIN sections s ON ts.section_id = s.id
+    JOIN sections s ON ts.section_id = s.id AND s.is_deleted = 0
+    LEFT JOIN grades g ON g.id = s.grade_id
     WHERE ts.user_id = ?
+      AND (ts.school_year_id = ? OR ts.school_year_id IS NULL)
   `
-  const [rows] = await db.query(sql, [userId])
+  const [rows] = await db.query(sql, [userId, currentSyId])
 
   return rows
 }

@@ -124,10 +124,9 @@ export default async function handler(req, res) {
         const activityIds = activities.map(a => a.id)
         if (activityIds.length > 0) {
           await conn.query(
-            'UPDATE activity_assignments SET /* no is_deleted here in schema */ assignment_key = assignment_key WHERE activity_id IN (?)',
+            'UPDATE activities SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE id IN (?)',
             [activityIds]
           )
-          await conn.query('UPDATE activities SET is_deleted = 1, deleted_at = NOW() WHERE id IN (?)', [activityIds])
         }
 
         await conn.commit()

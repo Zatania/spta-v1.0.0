@@ -1,6 +1,7 @@
 // pages/api/sections/[id].js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]'
+import { getCurrentSchoolYearId } from '../lib/schoolYear'
 import db from '../db' // adjust path as needed
 
 export default async function handler(req, res) {
@@ -63,20 +64,36 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'DELETE') {
+      const currentSyId = await getCurrentSchoolYearId()
+
       // check blockers (students not soft-deleted, activity assignments, teacher_sections)
       const blockers = []
 
-      const [stuRows] = await db.query('SELECT COUNT(*) AS cnt FROM students WHERE section_id = ? AND is_deleted = 0', [
-        sectionId
-      ])
-      if (stuRows[0].cnt > 0) blockers.push({ type: 'students', count: stuRows[0].cnt })
+      const [stuRows] = await db.query(
+        `SELECT COUNT(DISTINCT st.id) AS cnt
+          FROM students st
+          JOIN student_enrollments en ON en.student_id = st.id
+          WHERE en.section_id = ?
+            AND en.status = 'active'
+            AND st.is_deleted = 0`,
+        [sectionId]
+      )
+      if (Number(stuRows[0]?.cnt || 0) > 0) {
+        blockers.push({ type: 'active_student_enrollments', count: Number(stuRows[0].cnt) })
+      }
 
       const [aaRows] = await db.query('SELECT COUNT(*) AS cnt FROM activity_assignments WHERE section_id = ?', [
         sectionId
       ])
       if (aaRows[0].cnt > 0) blockers.push({ type: 'activity_assignments', count: aaRows[0].cnt })
 
-      const [tsRows] = await db.query('SELECT COUNT(*) AS cnt FROM teacher_sections WHERE section_id = ?', [sectionId])
+      const [tsRows] = await db.query(
+        `SELECT COUNT(*) AS cnt
+          FROM teacher_sections
+          WHERE section_id = ?
+            AND (school_year_id = ? OR school_year_id IS NULL)`,
+        [sectionId, currentSyId]
+      )
       if (tsRows[0].cnt > 0) blockers.push({ type: 'teacher_assignments', count: tsRows[0].cnt })
 
       if (blockers.length) {

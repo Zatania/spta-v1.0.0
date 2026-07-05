@@ -121,6 +121,7 @@ export default async function handler(req, res) {
       const grade_id = get(fields.grade_id)
       const section_id = get(fields.section_id)
       const parent_id = get(fields.parent_id)
+      const parent_relation = get(fields.parent_relation) || null
 
       if (!first_name || !last_name || !lrn || !grade_id || !section_id)
         return res.status(400).json({ message: 'Missing required fields' })
@@ -148,14 +149,33 @@ export default async function handler(req, res) {
       const [dup] = await db.query('SELECT id FROM students WHERE lrn = ? AND is_deleted = 0 LIMIT 1', [lrn])
       if (dup.length) return res.status(409).json({ message: 'LRN already exists' })
 
+      // photo
+      let newPictureUrl = null
+      let tempFilePath = null
+
+      const pictureFile = Array.isArray(files.picture) ? files.picture[0] : files.picture
+      if (pictureFile && pictureFile.size > 0) {
+        if (!pictureFile.mimetype?.startsWith('image/')) {
+          return res.status(400).json({ message: 'Please upload a valid image file' })
+        }
+
+        const ext = path.extname(pictureFile.originalFilename || pictureFile.newFilename || '') || '.jpg'
+        const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
+        const finalPath = path.join(uploadDir, unique)
+        tempFilePath = pictureFile.filepath
+        fs.renameSync(pictureFile.filepath, finalPath)
+        newPictureUrl = `/uploads/students/${unique}`
+      }
       let conn
       try {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
         const [ins] = await conn.query(
-          'INSERT INTO students (first_name, last_name, lrn, is_deleted, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
-          [first_name, last_name, lrn]
+          `INSERT INTO students
+            (first_name, last_name, lrn, picture_url, is_deleted, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 0, NOW(), NOW())`,
+          [first_name, last_name, lrn, newPictureUrl]
         )
         const studentId = ins.insertId
 
@@ -171,9 +191,10 @@ export default async function handler(req, res) {
         if (parent_id) {
           const [p] = await conn.query('SELECT id FROM parents WHERE id = ? AND is_deleted = 0 LIMIT 1', [parent_id])
           if (p.length)
-            await conn.query('INSERT INTO student_parents (student_id, parent_id) VALUES (?, ?)', [
+            await conn.query('INSERT INTO student_parents (student_id, parent_id, relation) VALUES (?, ?, ?)', [
               studentId,
-              parent_id
+              parent_id,
+              parent_relation
             ])
         }
 
@@ -191,6 +212,20 @@ export default async function handler(req, res) {
           if (conn) conn.release()
         } catch {}
         console.error('Create student error', e)
+
+        if (newPictureUrl) {
+          const savedPath = path.join(process.cwd(), 'public', newPictureUrl)
+          if (fs.existsSync(savedPath)) {
+            try {
+              fs.unlinkSync(savedPath)
+            } catch {}
+          }
+        }
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+          try {
+            fs.unlinkSync(tempFilePath)
+          } catch {}
+        }
         if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Duplicate entry' })
 
         return res.status(500).json({ message: 'Internal server error' })

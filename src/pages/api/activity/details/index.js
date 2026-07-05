@@ -1,6 +1,7 @@
 // pages/api/activity/details.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
+import { getCurrentSchoolYearId } from '../../lib/schoolYear'
 import db from '../../db'
 
 export default async function handler(req, res) {
@@ -9,6 +10,8 @@ export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+    const currentSyId = await getCurrentSchoolYearId()
 
     const { activity_id, section_id, page = 1, page_size = 50, search = '' } = req.query
     if (!activity_id || !section_id) return res.status(400).json({ message: 'activity_id and section_id are required' })
@@ -27,11 +30,14 @@ export default async function handler(req, res) {
 
     // Count total
     const countSql = `
-      SELECT COUNT(DISTINCT st.id) AS total
       FROM students st
-      WHERE st.section_id = ? AND st.is_deleted = 0 ${search ? ' ' + searchClause : ''}
+        JOIN student_enrollments en ON en.student_id = st.id
+        WHERE en.section_id = ?
+          AND en.school_year_id = ?
+          AND en.status = 'active'
+          AND st.is_deleted = 0 ${search ? ' ' + searchClause : ''}
     `
-    const [countRows] = await db.query(countSql, [section_id, ...searchParams])
+    const [countRows] = await db.query(countSql, [section_id, currentSyId, ...searchParams])
     const total = countRows[0]?.total ?? 0
 
     // Pagination calc
@@ -53,17 +59,21 @@ export default async function handler(req, res) {
         pay.payment_date AS payment_date,
         GROUP_CONCAT(CONCAT(pa.first_name, ' ', pa.last_name) SEPARATOR '; ') AS parents
       FROM students st
+      JOIN student_enrollments en ON en.student_id = st.id
       LEFT JOIN attendance att ON att.student_id = st.id AND att.activity_assignment_id = ?
       LEFT JOIN payments pay ON pay.student_id = st.id AND pay.activity_assignment_id = ?
       LEFT JOIN student_parents sp ON sp.student_id = st.id
-      LEFT JOIN parents pa ON pa.id = sp.parent_id
-      WHERE st.section_id = ? AND st.is_deleted = 0
+      LEFT JOIN parents pa ON pa.id = sp.parent_id AND pa.is_deleted = 0
+      WHERE en.section_id = ?
+        AND en.school_year_id = ?
+        AND en.status = 'active'
+        AND st.is_deleted = 0
       ${search ? ` ${searchClause}` : ''}
       GROUP BY st.id
       ORDER BY st.last_name, st.first_name
       LIMIT ? OFFSET ?
     `
-    const params = [assignmentId, assignmentId, section_id, ...searchParams, limit, offset]
+    const params = [assignmentId, assignmentId, section_id, currentSyId, ...searchParams, limit, offset]
     const [rows] = await db.query(sql, params)
 
     return res.status(200).json({ total, page: Number(page), page_size: limit, students: rows })

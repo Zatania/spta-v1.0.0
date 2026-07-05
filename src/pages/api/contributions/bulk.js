@@ -23,6 +23,7 @@ import { getCurrentSchoolYearId } from '../lib/schoolYear'
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ message: 'Method not allowed' })
+    const allowedTypes = new Set(['service', 'materials', 'labor', 'other'])
 
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
@@ -34,8 +35,9 @@ export default async function handler(req, res) {
 
     // Get assignment and its section / grade (for permission)
     const [assRows] = await db.query(
-      `SELECT aa.id, aa.section_id, aa.grade_id
-         FROM activity_assignments aa
+      `SELECT aa.id, aa.section_id, aa.grade_id, a.school_year_id
+        FROM activity_assignments aa
+        JOIN activities a ON a.id = aa.activity_id AND a.is_deleted = 0
         WHERE aa.id = ?
         LIMIT 1`,
       [activity_assignment_id]
@@ -43,10 +45,10 @@ export default async function handler(req, res) {
     if (!assRows.length) return res.status(404).json({ message: 'Assignment not found' })
     const assignment = assRows[0]
 
+    const syId = await getCurrentSchoolYearId()
+
     // Teacher must be assigned to the section (current SY)
     if (session.user.role === 'teacher') {
-      const syId = await getCurrentSchoolYearId()
-
       const [ok] = await db.query(
         `SELECT 1 FROM teacher_sections
           WHERE user_id = ? AND section_id = ? AND school_year_id = ?
@@ -54,6 +56,36 @@ export default async function handler(req, res) {
         [session.user.id, assignment.section_id, syId]
       )
       if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
+    }
+
+    const submittedStudentIds = [...new Set(records.map(r => Number(r.student_id)).filter(Number.isFinite))]
+
+    if (!submittedStudentIds.length) {
+      return res.status(400).json({ message: 'No valid student IDs submitted' })
+    }
+
+    const placeholders = submittedStudentIds.map(() => '?').join(',')
+
+    const [validRows] = await db.query(
+      `SELECT st.id
+        FROM students st
+        JOIN student_enrollments en ON en.student_id = st.id
+        WHERE st.id IN (${placeholders})
+          AND st.is_deleted = 0
+          AND en.school_year_id = ?
+          AND en.status = 'active'
+          AND en.grade_id = ?
+          AND en.section_id = ?`,
+      [...submittedStudentIds, syId, assignment.grade_id, assignment.section_id]
+    )
+
+    const validIds = new Set(validRows.map(r => Number(r.id)))
+    const invalidIds = submittedStudentIds.filter(id => !validIds.has(id))
+    if (invalidIds.length) {
+      return res.status(400).json({
+        message: 'Some students do not belong to this assignment section/current school year',
+        invalid_student_ids: invalidIds
+      })
     }
 
     // Build values; resolve parent_id per student
@@ -64,6 +96,10 @@ export default async function handler(req, res) {
     for (const r of records) {
       const studentId = Number(r.student_id)
       if (!studentId || !r.contribution_type) continue
+
+      if (!allowedTypes.has(r.contribution_type)) {
+        return res.status(400).json({ message: 'Invalid contribution type', student_id: studentId })
+      }
 
       // Require at least one non-empty field; otherwise skip
       const hasAnyDetail =

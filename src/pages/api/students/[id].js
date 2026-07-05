@@ -89,6 +89,7 @@ export default async function handler(req, res) {
       const grade_id = get(fields.grade_id)
       const section_id = get(fields.section_id)
       const parent_id = get(fields.parent_id)
+      const parent_relation = get(fields.parent_relation) || null
 
       if (!first_name || !last_name || !lrn || !grade_id || !section_id)
         return res.status(400).json({ message: 'Missing required fields' })
@@ -195,9 +196,10 @@ export default async function handler(req, res) {
         if (parent_id) {
           const [p] = await conn.query('SELECT id FROM parents WHERE id = ? AND is_deleted = 0 LIMIT 1', [parent_id])
           if (p.length)
-            await conn.query('INSERT INTO student_parents (student_id, parent_id) VALUES (?, ?)', [
+            await conn.query('INSERT INTO student_parents (student_id, parent_id, relation) VALUES (?, ?, ?)', [
               studentId,
-              parent_id
+              parent_id,
+              parent_relation
             ])
         }
 

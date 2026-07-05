@@ -9,10 +9,16 @@ export default async function handler(req, res) {
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
     if (req.method === 'POST') {
+      if (session.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Admins only' })
+      }
       const { name, grade_id } = req.body
       if (!name || !grade_id) {
         return res.status(400).json({ message: 'Missing name or grade_id' })
       }
+
+      const [gradeRows] = await db.query('SELECT id FROM grades WHERE id = ? LIMIT 1', [grade_id])
+      if (!gradeRows.length) return res.status(400).json({ message: 'Grade not found' })
 
       const insertSql = `
         INSERT INTO sections (name, grade_id, is_deleted)
@@ -24,6 +30,9 @@ export default async function handler(req, res) {
         return res.status(201).json({ id: result.insertId, name, grade_id })
       } catch (dbErr) {
         console.error('POST /api/sections insert error:', dbErr)
+        if (dbErr?.code === 'ER_DUP_ENTRY') {
+          return res.status(409).json({ message: 'Section already exists in this grade' })
+        }
 
         return res.status(500).json({ message: 'Failed to add section' })
       }

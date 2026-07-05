@@ -1,12 +1,21 @@
-// pages/api/grades.js
+// pages/api/grades/index.js
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '../auth/[...nextauth]'
 import db from '../db'
 
 export default async function handler(req, res) {
   try {
-    const [rows] = await db.query(`SELECT id, name FROM grades`)
-    res.status(200).json(rows)
+    const session = await getServerSession(req, res, authOptions)
+    if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+    if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
+
+    const [rows] = await db.query(`SELECT id, name FROM grades ORDER BY id, name`)
+
+    return res.status(200).json(rows)
   } catch (err) {
-    console.error('GET /grades error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    console.error('GET /api/grades error:', err)
+
+    return res.status(500).json({ message: 'Internal server error' })
   }
 }

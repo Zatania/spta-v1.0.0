@@ -1,6 +1,7 @@
 // pages/api/export/parent_checklist.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
+import { getCurrentSchoolYearId } from '../../lib/schoolYear'
 import db from '../../db'
 import PDFDocument from 'pdfkit'
 
@@ -15,6 +16,8 @@ export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+    const currentSyId = await getCurrentSchoolYearId()
 
     const assignmentId = Number(req.query.assignment_id)
     if (!assignmentId) return res.status(400).json({ message: 'assignment_id is required' })
@@ -35,10 +38,15 @@ export default async function handler(req, res) {
     const ass = assRows[0]
 
     if (session.user.role === 'teacher') {
-      const [ok] = await db.query('SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? LIMIT 1', [
-        session.user.id,
-        ass.section_id
-      ])
+      const [ok] = await db.query(
+        `SELECT 1
+          FROM teacher_sections
+          WHERE user_id = ?
+            AND section_id = ?
+            AND (school_year_id = ? OR school_year_id IS NULL)
+          LIMIT 1`,
+        [session.user.id, ass.section_id, currentSyId]
+      )
       if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
     }
 
@@ -47,13 +55,17 @@ export default async function handler(req, res) {
       `
       SELECT st.id AS student_id, st.lrn, st.last_name, st.first_name,
         p.id AS parent_id, p.first_name AS parent_first, p.last_name AS parent_last
-      FROM students st
+      FROM student_enrollments en
+      JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
       LEFT JOIN student_parents sp ON sp.student_id = st.id
       LEFT JOIN parents p ON p.id = sp.parent_id AND p.is_deleted = 0
-      WHERE st.is_deleted = 0 AND st.grade_id = ? AND st.section_id = ?
+      WHERE en.school_year_id = ?
+        AND en.status = 'active'
+        AND en.grade_id = ?
+        AND en.section_id = ?
       ORDER BY st.last_name, st.first_name
     `,
-      [ass.grade_id, ass.section_id]
+      [currentSyId, ass.grade_id, ass.section_id]
     )
 
     // group parents per student

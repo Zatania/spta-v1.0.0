@@ -1,10 +1,29 @@
 // pages/api/activities/section.js
 import db from '../../db'
 import { getCurrentSchoolYearId } from '../../lib/schoolYear' // path is from /pages/api/activities/section.js
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '../../auth/[...nextauth]'
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
+  }
+  const session = await getServerSession(req, res, authOptions)
+  if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+
+  const currentSyId = await getCurrentSchoolYearId()
+
+  if (session.user.role === 'teacher') {
+    const [ok] = await db.query(
+      `SELECT 1
+       FROM teacher_sections
+      WHERE user_id = ?
+        AND section_id = ?
+        AND (school_year_id = ? OR school_year_id IS NULL)
+      LIMIT 1`,
+      [session.user.id, section_id, currentSyId]
+    )
+    if (!ok.length) return res.status(403).json({ message: 'Forbidden' })
   }
 
   try {
@@ -12,8 +31,6 @@ export default async function handler(req, res) {
     if (!section_id) {
       return res.status(400).json({ message: 'section_id is required' })
     }
-
-    const currentSyId = await getCurrentSchoolYearId()
 
     // Build date filters against alias a.activity_date
     const dateWhere = []
@@ -45,7 +62,7 @@ export default async function handler(req, res) {
 
         -- Payments
         SUM(CASE WHEN p.paid = 1 THEN 1 ELSE 0 END) AS paid_count,
-        SUM(CASE WHEN p.paid = 0 THEN 1 ELSE 0 END) AS unpaid_count,
+        SUM(CASE WHEN COALESCE(p.paid, 0) = 0 THEN 1 ELSE 0 END) AS unpaid_count,
 
         -- Total enrolled students for this section (current SY)
         COUNT(DISTINCT st.id) AS total_students

@@ -60,7 +60,7 @@ export default async function handler(req, res) {
     // ---- Permission: teacher must be assigned to this section in this SY ----
     if (isTeacher) {
       const [ownRows] = await db.query(
-        `SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? AND school_year_id = ? LIMIT 1`,
+        `SELECT 1 FROM teacher_sections WHERE user_id = ? AND section_id = ? AND school_year_id = ? AND ts.is_active = 1 LIMIT 1`,
         [teacherId, student.section_id, syId]
       )
       if (!ownRows.length) return res.status(403).json({ message: 'Not allowed to generate form for this student' })

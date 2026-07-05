@@ -1,18 +1,7 @@
-// pages/api/login.js
+// pages/api/login/index.js
 import * as bcrypt from 'bcryptjs'
 import { getCurrentSchoolYearId } from '../lib/schoolYear'
-import db from '../db' // adjust path to your DB helper
-
-/**
- * POST /api/login
- * Body: { username, password }
- *
- * - Authenticates against `users.password_hash`
- * - Ensures user.is_deleted = 0
- * - Loads single role from user_roles -> roles
- * - If role = 'teacher', also loads assigned sections from teacher_sections -> sections
- * - Returns sanitized user object (no password hash)
- */
+import db from '../db'
 
 const sanitizeUser = userRow => {
   const { password_hash, ...safe } = userRow
@@ -21,26 +10,27 @@ const sanitizeUser = userRow => {
 }
 
 const getUserByUsername = async username => {
-  const sql = `
-    SELECT id, username, password_hash, email, full_name, is_deleted
-    FROM users
-    WHERE username = ?
-    LIMIT 1
-  `
-  const [rows] = await db.query(sql, [username])
+  const [rows] = await db.query(
+    `SELECT id, username, password_hash, email, full_name, is_deleted
+       FROM users
+      WHERE username = ?
+      LIMIT 1`,
+    [username]
+  )
 
   return rows[0] ?? null
 }
 
 const getUserRole = async userId => {
-  const sql = `
-    SELECT r.name
-    FROM roles r
-    JOIN user_roles ur ON ur.role_id = r.id
-    WHERE ur.user_id = ?
-    LIMIT 1
-  `
-  const [rows] = await db.query(sql, [userId])
+  const [rows] = await db.query(
+    `SELECT r.name
+       FROM roles r
+       JOIN user_roles ur ON ur.role_id = r.id
+      WHERE ur.user_id = ?
+      ORDER BY r.id
+      LIMIT 1`,
+    [userId]
+  )
 
   return rows[0]?.name ?? null
 }
@@ -48,23 +38,29 @@ const getUserRole = async userId => {
 const getTeacherSections = async userId => {
   const currentSyId = await getCurrentSchoolYearId()
 
-  const sql = `
-    SELECT s.id, s.name AS section_name, s.grade_id, g.name AS grade_name
-    FROM teacher_sections ts
-    JOIN sections s ON ts.section_id = s.id AND s.is_deleted = 0
-    LEFT JOIN grades g ON g.id = s.grade_id
-    WHERE ts.user_id = ?
-      AND (ts.school_year_id = ? OR ts.school_year_id IS NULL)
-  `
-  const [rows] = await db.query(sql, [userId, currentSyId])
+  const [rows] = await db.query(
+    `SELECT
+        ts.id AS assignment_id,
+        s.id,
+        s.name AS section_name,
+        s.name AS name,
+        s.grade_id,
+        g.name AS grade_name
+       FROM teacher_sections ts
+       JOIN sections s ON ts.section_id = s.id AND s.is_deleted = 0
+       JOIN grades g ON g.id = s.grade_id
+      WHERE ts.user_id = ?
+        AND ts.school_year_id = ?
+        AND ts.is_active = 1
+      ORDER BY g.id, s.name`,
+    [userId, currentSyId]
+  )
 
   return rows
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed. Use POST.' })
-  }
+  if (req.method !== 'POST') return res.status(405).json({ message: 'Method not allowed. Use POST.' })
 
   try {
     const { username, password } = req.body ?? {}
@@ -73,35 +69,19 @@ export default async function handler(req, res) {
       return res.status(400).json({ message: 'username and password are required' })
     }
 
-    // 1) Get user row
     const userRow = await getUserByUsername(username)
-    if (!userRow) {
-      return res.status(401).json({ message: 'Invalid credentials' })
-    }
+    if (!userRow) return res.status(401).json({ message: 'Invalid credentials' })
+    if (userRow.is_deleted) return res.status(403).json({ message: 'Account is deactivated' })
 
-    if (userRow.is_deleted) {
-      return res.status(403).json({ message: 'Account is deactivated' })
-    }
-
-    // 2) Verify password
     const isMatch = await bcrypt.compare(password, userRow.password_hash)
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' })
-    }
+    if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' })
 
-    // 3) Load single role
     const role = await getUserRole(userRow.id)
+    const sections = role === 'teacher' ? await getTeacherSections(userRow.id) : []
 
-    // 4) If teacher, load sections
-    let sections = []
-    if (role === 'teacher') {
-      sections = await getTeacherSections(userRow.id)
-    }
-
-    // 5) Build safe user object
     const user = sanitizeUser(userRow)
     user.role = role
-    if (sections.length) user.sections = sections
+    user.sections = sections
 
     return res.status(200).json({ user })
   } catch (err) {

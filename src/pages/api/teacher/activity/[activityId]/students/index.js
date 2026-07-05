@@ -35,6 +35,7 @@ export default async function handler(req, res) {
         AND (a.created_by = ? OR ts.user_id = ?)
         AND a.is_deleted = 0
         AND a.school_year_id = ?
+        AND ts.is_active = 1
     `,
       [syId, activityId, teacherId, teacherId, syId]
     )
@@ -43,7 +44,7 @@ export default async function handler(req, res) {
 
     // Build list of activity_assignment_ids the teacher can view
     const params = [activityId, teacherId, syId]
-    let aaWhere = ' WHERE aa.activity_id = ? AND ts.user_id = ? AND ts.school_year_id = ? '
+    let aaWhere = ' WHERE aa.activity_id = ? AND ts.user_id = ? AND ts.school_year_id = ? AND ts.is_active = 1'
     if (sectionId) {
       aaWhere += ' AND aa.section_id = ?'
       params.push(sectionId)

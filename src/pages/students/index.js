@@ -433,6 +433,10 @@ export default function StudentsPage() {
       newForm.grade_id = String(a.grade_id)
       newForm.section_id = String(a.id)
       newForm.teacher_id = String(me.user.id) // Auto-select current teacher
+    } else if (me?.teacher?.assigned_sections && me.teacher.assigned_sections.length > 1) {
+      const gradeIds = Array.from(new Set(me.teacher.assigned_sections.map(s => String(s.grade_id))))
+      if (gradeIds.length === 1) newForm.grade_id = gradeIds[0]
+      newForm.teacher_id = String(me.user.id)
     }
 
     setForm(newForm)
@@ -479,6 +483,18 @@ export default function StudentsPage() {
         setSaving(false)
 
         return
+      }
+
+      if (isTeacher && !isEditing) {
+        const ownsSelectedSection = teacherAssignedSections.some(
+          s => String(s.id) === String(form.section_id) && String(s.grade_id) === String(form.grade_id)
+        )
+        if (!ownsSelectedSection) {
+          alert('Teachers can only add students to their active assigned section for the current school year.')
+          setSaving(false)
+
+          return
+        }
       }
 
       /* // For new students, require image
@@ -570,7 +586,8 @@ export default function StudentsPage() {
       setForm(prev => ({
         ...prev,
         parent_id: String(newParentId),
-        parent: created // <-- stash the object so value stays stable
+        parent: created, // keep the object so Autocomplete value stays stable
+        parent_relation: parentForm.relation || prev.parent_relation || ''
       }))
 
       setParentDialogOpen(false)
@@ -580,8 +597,6 @@ export default function StudentsPage() {
         contact_info: '',
         relation: ''
       })
-
-      parent_relation: parentForm.relation || ''
     } catch (err) {
       console.error('Failed to create parent', err)
       alert(err?.response?.data?.message ?? 'Failed to create parent')
@@ -681,6 +696,8 @@ export default function StudentsPage() {
   // UI state helpers
   const isTeacher = session?.user?.role === 'teacher'
   const teacherAssignedSections = me?.teacher?.assigned_sections ?? []
+  const teacherAllowedGradeIds = Array.from(new Set(teacherAssignedSections.map(s => String(s.grade_id))))
+  const visibleGrades = isTeacher ? grades.filter(g => teacherAllowedGradeIds.includes(String(g.id))) : grades
 
   // If teacher has exactly 1 assigned section and is creating (not editing), show that grade/section as fixed
   const shouldDisableGradeSection = isTeacher && teacherAssignedSections.length === 1 && !isEditing
@@ -746,8 +763,8 @@ export default function StudentsPage() {
           sx={{ minWidth: 160 }}
           disabled={isTeacher && teacherAssignedSections.length === 1}
         >
-          <MenuItem value=''>All Grades</MenuItem>
-          {grades.map(g => (
+          <MenuItem value=''>{isTeacher ? 'All assigned grades' : 'All Grades'}</MenuItem>
+          {visibleGrades.map(g => (
             <MenuItem key={g.id} value={String(g.id)}>
               {g.name}
             </MenuItem>
@@ -764,7 +781,7 @@ export default function StudentsPage() {
           sx={{ minWidth: 200 }}
           disabled={isTeacher && teacherAssignedSections.length === 1}
         >
-          <MenuItem value=''>All Sections</MenuItem>
+          <MenuItem value=''>{isTeacher ? 'All assigned sections' : 'All Sections'}</MenuItem>
 
           {isTeacher
             ? // teacher sees only their assigned sections in the filter list (or all if admin)
@@ -824,6 +841,10 @@ export default function StudentsPage() {
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth='md'>
         <DialogTitle>{form.id ? 'Edit Student' : 'Add Student'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          {isTeacher && !teacherAssignedSections.length && (
+            <Alert severity='warning'>You have no active section assignment for the current school year. Ask the admin to assign you before adding students.</Alert>
+          )}
+
           {/* Student Picture Upload */}
           {/* <Box display='flex' alignItems='center' gap={2}>
             <Avatar src={form.picture_preview} sx={{ width: 80, height: 80 }}>
@@ -899,11 +920,11 @@ export default function StudentsPage() {
               fullWidth
               disabled={shouldDisableGradeSection}
               required
-              helperText='Choose a grade first; available sections will follow.'
+              helperText={isTeacher ? 'Limited to your active assigned grade/section.' : 'Choose a grade first; available sections will follow.'}
               InputProps={{ endAdornment: <Hint title='Sections list depends on the selected grade.' /> }}
             >
               <MenuItem value=''>-- Select Grade --</MenuItem>
-              {grades.map(g => (
+              {visibleGrades.map(g => (
                 <MenuItem key={g.id} value={String(g.id)}>
                   {g.name}
                 </MenuItem>
@@ -1104,7 +1125,7 @@ export default function StudentsPage() {
             InputProps={{ endAdornment: <Hint title='For repeaters, choose the same grade next SY.' /> }}
           >
             <MenuItem value=''>-- Select Grade --</MenuItem>
-            {grades.map(g => (
+            {visibleGrades.map(g => (
               <MenuItem key={g.id} value={String(g.id)}>
                 {g.name}
               </MenuItem>
@@ -1169,7 +1190,7 @@ export default function StudentsPage() {
             InputProps={{ endAdornment: <Hint title='Internal reassignment—does not set status to “transferred”.' /> }}
           >
             <MenuItem value=''>-- Select Grade --</MenuItem>
-            {grades.map(g => (
+            {visibleGrades.map(g => (
               <MenuItem key={g.id} value={String(g.id)}>
                 {g.name}
               </MenuItem>
@@ -1283,7 +1304,7 @@ export default function StudentsPage() {
                 helperText='Must be Grade 6 to mark elementary completion.'
                 InputProps={{ endAdornment: <Hint title='API will reject non–Grade 6 completion.' /> }}
               >
-                {grades.map(g => (
+                {visibleGrades.map(g => (
                   <MenuItem key={g.id} value={String(g.id)}>
                     {g.name}
                   </MenuItem>

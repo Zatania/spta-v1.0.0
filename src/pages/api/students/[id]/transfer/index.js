@@ -26,7 +26,8 @@ export default async function handler(req, res) {
          FROM student_enrollments en
          JOIN teacher_sections ts
            ON ts.section_id = en.section_id
-          AND (ts.school_year_id = ? OR ts.school_year_id IS NULL)
+          AND ts.school_year_id = ?
+          AND ts.is_active = 1
          WHERE en.student_id = ? AND en.school_year_id = ? AND ts.user_id = ?
          LIMIT 1`,
         [syId, studentId, syId, session.user.id]
@@ -36,7 +37,8 @@ export default async function handler(req, res) {
       // must own target section too
       const [okTarget] = await db.query(
         `SELECT 1 FROM teacher_sections
-         WHERE user_id = ? AND section_id = ? AND (school_year_id = ?)
+         WHERE user_id = ? AND section_id = ? AND school_year_id = ?
+           AND is_active = 1
          LIMIT 1`,
         [session.user.id, to_section_id, syId]
       )

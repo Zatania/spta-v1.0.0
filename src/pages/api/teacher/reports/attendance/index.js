@@ -39,6 +39,7 @@ export default async function handler(req, res) {
         AND a.school_year_id = ?
         AND ts.user_id = ?
         AND ts.school_year_id = ?
+        AND ts.is_active = 1
       `,
       [activityId, syId, teacherId, syId]
     )
@@ -59,6 +60,7 @@ export default async function handler(req, res) {
       WHERE aa.activity_id = ?
         AND ts.user_id = ?
         AND ts.school_year_id = ?
+        AND ts.is_active = 1
       `,
       [activityId, teacherId, syId]
     )

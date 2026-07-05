@@ -32,14 +32,15 @@ export default async function handler(req, res) {
 
     const en = rows[0]
 
-    // Teachers can only update if they are assigned to that section in the same SY (or null SY fallback)
+    // Teachers can only update if they are actively assigned to that section in the same SY
     if (session.user.role === 'teacher') {
       const [ok] = await db.query(
         `SELECT 1
            FROM teacher_sections
           WHERE user_id = ?
             AND section_id = ?
-            AND (school_year_id = ?)
+            AND school_year_id = ?
+           AND is_active = 1
           LIMIT 1`,
         [session.user.id, en.section_id, en.school_year_id]
       )

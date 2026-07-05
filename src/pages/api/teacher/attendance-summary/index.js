@@ -31,7 +31,7 @@ export default async function handler(req, res) {
       FROM activities a
       JOIN activity_assignments aa ON aa.activity_id = a.id
       JOIN teacher_sections ts ON ts.section_id = aa.section_id AND ts.user_id = ? AND ts.school_year_id = ?
-      WHERE a.is_deleted = 0 AND a.school_year_id = ?
+      WHERE a.is_deleted = 0 AND a.school_year_id = ? AND ts.is_active = 1
       ORDER BY a.activity_date DESC, a.title ASC
     `
     const [activities] = await db.query(sql, [teacherId, syId, syId])

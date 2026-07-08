@@ -78,6 +78,9 @@ export default async function handler(req, res) {
 
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+    if (!['admin', 'teacher'].includes(session.user.role)) {
+      return res.status(403).json({ message: 'Forbidden' })
+    }
 
     const { activity_assignment_id, records } = req.body || {}
     const assignmentId = Number(activity_assignment_id)

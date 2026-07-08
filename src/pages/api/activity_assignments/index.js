@@ -17,8 +17,8 @@ export default async function handler(req, res) {
       const limit = Math.max(1, Math.min(1000, Number(page_size) || 50))
       const offset = (Math.max(1, Number(page) || 1) - 1) * limit
 
-      const where = ['a.school_year_id = ?', 'a.is_deleted = 0', 's.is_deleted = 0']
-      const params = [syId]
+      const where = ['a.school_year_id = ?', 'aa.school_year_id = ?', 'a.is_deleted = 0', 's.is_deleted = 0']
+      const params = [syId, syId]
 
       if (activity_id) {
         where.push('aa.activity_id = ?')
@@ -130,9 +130,9 @@ export default async function handler(req, res) {
 
       try {
         const [inserted] = await db.query(
-          `INSERT INTO activity_assignments (activity_id, grade_id, section_id)
-           VALUES (?, ?, ?)`,
-          [activityId, section.grade_id, sectionId]
+          `INSERT INTO activity_assignments (activity_id, grade_id, section_id, school_year_id)
+           VALUES (?, ?, ?, ?)`,
+          [activityId, section.grade_id, sectionId, syId]
         )
 
         await auditLog({

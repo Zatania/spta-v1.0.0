@@ -48,7 +48,7 @@ export default async function handler(req, res) {
       }
 
       const joins = [
-        'JOIN activity_assignments aa ON aa.activity_id = a.id',
+        'JOIN activity_assignments aa ON aa.activity_id = a.id AND aa.school_year_id = a.school_year_id',
         'JOIN sections s ON s.id = aa.section_id AND s.is_deleted = 0',
         'JOIN grades g ON g.id = aa.grade_id'
       ]
@@ -225,9 +225,9 @@ export default async function handler(req, res) {
         }
 
         await conn.query(
-          `INSERT INTO activity_assignments (activity_id, grade_id, section_id)
+          `INSERT INTO activity_assignments (activity_id, grade_id, section_id, school_year_id)
            VALUES ?`,
-          [sections.map(s => [activityId, s.grade_id, s.section_id])]
+          [sections.map(s => [activityId, s.grade_id, s.section_id, syId])]
         )
 
         await auditLog(

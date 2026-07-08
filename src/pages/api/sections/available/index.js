@@ -2,7 +2,7 @@
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../auth/[...nextauth]'
 import db from '../../db'
-import { getCurrentSchoolYearId } from '../../lib/schoolYear'
+import { resolveSchoolYearId } from '../../lib/schoolYear'
 
 /**
  * GET /api/sections/available?context=teacher&teacher_id=&search=&grade_id=&page=&page_size=
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     const limit = Math.max(1, Math.min(500, Number(page_size) || 100))
     const offset = (Math.max(1, Number(page) || 1) - 1) * limit
 
-    const currentSyId = await getCurrentSchoolYearId()
+    const currentSyId = await resolveSchoolYearId(req)
 
     // Common filters
     const where = ['s.is_deleted = 0']
@@ -66,6 +66,7 @@ export default async function handler(req, res) {
              SELECT 1 FROM teacher_sections tsx
              WHERE tsx.section_id = s.id
                AND tsx.school_year_id = ?
+               AND tsx.is_active = 1
                AND tsx.user_id <> ?
            )`
         : `NOT EXISTS (
@@ -133,6 +134,7 @@ export default async function handler(req, res) {
       LEFT JOIN teacher_sections ts
         ON ts.section_id = s.id
        AND ts.school_year_id = ?
+       AND ts.is_active = 1
       LEFT JOIN users u
         ON u.id = ts.user_id
        AND u.is_deleted = 0

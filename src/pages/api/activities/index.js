@@ -18,10 +18,102 @@ function normalizeMoney(value) {
   return Number.isFinite(n) && n >= 0 ? n : null
 }
 
+function parseIdArray(value) {
+  const arr = Array.isArray(value) ? value : value == null || value === '' ? [] : String(value).split(',')
+
+  return [...new Set(arr.map(v => Number(v)).filter(v => Number.isInteger(v) && v > 0))]
+}
+
+async function getTargetSections(conn, { session, syId, assignment_mode, grade_ids, section_id }) {
+  if (session.user.role === 'admin') {
+    if (assignment_mode === 'ALL') {
+      const [rows] = await conn.query(
+        `SELECT id AS section_id, grade_id
+           FROM sections
+          WHERE is_deleted = 0
+          ORDER BY grade_id, name`
+      )
+
+      return rows
+    }
+
+    if (assignment_mode === 'GRADES') {
+      const gradeIds = parseIdArray(grade_ids)
+      if (!gradeIds.length) {
+        const err = new Error('Select at least one grade')
+        err.status = 400
+        throw err
+      }
+
+      const [rows] = await conn.query(
+        `SELECT id AS section_id, grade_id
+           FROM sections
+          WHERE is_deleted = 0
+            AND grade_id IN (${gradeIds.map(() => '?').join(',')})
+          ORDER BY grade_id, name`,
+        gradeIds
+      )
+
+      return rows
+    }
+
+    if (assignment_mode === 'SECTION') {
+      const sectionId = Number(section_id)
+      if (!Number.isInteger(sectionId) || sectionId <= 0) {
+        const err = new Error('section_id is required for SECTION mode')
+        err.status = 400
+        throw err
+      }
+
+      const [rows] = await conn.query(
+        `SELECT id AS section_id, grade_id
+           FROM sections
+          WHERE id = ? AND is_deleted = 0
+          LIMIT 1`,
+        [sectionId]
+      )
+
+      return rows
+    }
+
+    const err = new Error('assignment_mode must be ALL, GRADES, or SECTION')
+    err.status = 400
+    throw err
+  }
+
+  if (session.user.role === 'teacher') {
+    const sectionId = Number(section_id)
+    if (!Number.isInteger(sectionId) || sectionId <= 0) {
+      const err = new Error('section_id is required for teachers')
+      err.status = 400
+      throw err
+    }
+
+    const [rows] = await conn.query(
+      `SELECT s.id AS section_id, s.grade_id
+         FROM teacher_sections ts
+         JOIN sections s ON s.id = ts.section_id AND s.is_deleted = 0
+        WHERE ts.user_id = ?
+          AND ts.section_id = ?
+          AND ts.school_year_id = ?
+          AND ts.is_active = 1
+        LIMIT 1`,
+      [session.user.id, sectionId, syId]
+    )
+
+    return rows
+  }
+
+  const err = new Error('Forbidden')
+  err.status = 403
+  throw err
+}
+
 export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+    if (!['admin', 'teacher'].includes(session.user.role)) return res.status(403).json({ message: 'Forbidden' })
 
     const syId = await resolveSchoolYearId(req)
 
@@ -36,7 +128,7 @@ export default async function handler(req, res) {
 
       if (search) {
         where.push('a.title LIKE ?')
-        whereParams.push(`%${search}%`)
+        whereParams.push(`%${String(search).trim()}%`)
       }
       if (date_from) {
         where.push('a.activity_date >= ?')
@@ -124,7 +216,8 @@ export default async function handler(req, res) {
         section_id = null
       } = req.body || {}
 
-      if (!title || !activity_date) return res.status(400).json({ message: 'title and activity_date are required' })
+      if (!title || !String(title).trim()) return res.status(400).json({ message: 'title is required' })
+      if (!activity_date) return res.status(400).json({ message: 'activity_date is required' })
 
       const payFlag = typeof payments_enabled === 'undefined' ? 1 : payments_enabled ? 1 : 0
       const safeFeeType = normalizeFeeType(fee_type)
@@ -135,87 +228,7 @@ export default async function handler(req, res) {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
-        const [insertedActivity] = await conn.query(
-          `INSERT INTO activities
-             (title, activity_date, fee_type, fee_amount, school_year_id, payments_enabled, created_by, is_deleted, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, NOW(), NOW())`,
-          [String(title).trim(), activity_date, safeFeeType, safeFeeAmount, syId, payFlag, session.user.id]
-        )
-        const activityId = insertedActivity.insertId
-
-        let sections = []
-
-        if (session.user.role === 'admin') {
-          if (assignment_mode === 'GRADES') {
-            const gradeIds = [...new Set((Array.isArray(grade_ids) ? grade_ids : []).map(Number).filter(Number.isInteger))]
-            if (!gradeIds.length) {
-              await conn.rollback()
-              conn.release()
-
-              return res.status(400).json({ message: 'Select at least one grade' })
-            }
-
-            const [rows] = await conn.query(
-              `SELECT id AS section_id, grade_id
-                 FROM sections
-                WHERE is_deleted = 0
-                  AND grade_id IN (${gradeIds.map(() => '?').join(',')})
-                ORDER BY grade_id, name`,
-              gradeIds
-            )
-            sections = rows
-          } else if (assignment_mode === 'SECTION') {
-            const sectionId = Number(section_id)
-            if (!Number.isInteger(sectionId) || sectionId <= 0) {
-              await conn.rollback()
-              conn.release()
-
-              return res.status(400).json({ message: 'section_id is required for SECTION mode' })
-            }
-            const [rows] = await conn.query(
-              `SELECT id AS section_id, grade_id
-                 FROM sections
-                WHERE id = ? AND is_deleted = 0
-                LIMIT 1`,
-              [sectionId]
-            )
-            sections = rows
-          } else {
-            const [rows] = await conn.query(
-              `SELECT id AS section_id, grade_id
-                 FROM sections
-                WHERE is_deleted = 0
-                ORDER BY grade_id, name`
-            )
-            sections = rows
-          }
-        } else if (session.user.role === 'teacher') {
-          const sectionId = Number(section_id)
-          if (!Number.isInteger(sectionId) || sectionId <= 0) {
-            await conn.rollback()
-            conn.release()
-
-            return res.status(400).json({ message: 'section_id is required for teachers' })
-          }
-
-          const [rows] = await conn.query(
-            `SELECT s.id AS section_id, s.grade_id
-               FROM teacher_sections ts
-               JOIN sections s ON s.id = ts.section_id AND s.is_deleted = 0
-              WHERE ts.user_id = ?
-                AND ts.section_id = ?
-                AND ts.school_year_id = ?
-                AND ts.is_active = 1
-              LIMIT 1`,
-            [session.user.id, sectionId, syId]
-          )
-          sections = rows
-        } else {
-          await conn.rollback()
-          conn.release()
-
-          return res.status(403).json({ message: 'Forbidden' })
-        }
+        const sections = await getTargetSections(conn, { session, syId, assignment_mode, grade_ids, section_id })
 
         if (!sections.length) {
           await conn.rollback()
@@ -223,6 +236,14 @@ export default async function handler(req, res) {
 
           return res.status(400).json({ message: 'No valid sections found for this activity' })
         }
+
+        const [insertedActivity] = await conn.query(
+          `INSERT INTO activities
+             (title, activity_date, fee_type, fee_amount, school_year_id, payments_enabled, created_by, is_deleted, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, NOW(), NOW())`,
+          [String(title).trim(), activity_date, safeFeeType, safeFeeAmount, syId, payFlag, session.user.id]
+        )
+        const activityId = insertedActivity.insertId
 
         await conn.query(
           `INSERT INTO activity_assignments (activity_id, grade_id, section_id, school_year_id)
@@ -238,10 +259,12 @@ export default async function handler(req, res) {
             entityId: activityId,
             details: {
               school_year_id: syId,
-              title,
+              title: String(title).trim(),
               activity_date,
               fee_type: safeFeeType,
               payments_enabled: !!payFlag,
+              assignment_mode,
+              grade_ids: parseIdArray(grade_ids),
               section_ids: sections.map(s => s.section_id)
             }
           },
@@ -262,11 +285,9 @@ export default async function handler(req, res) {
           } catch {}
         }
 
+        if (err?.status) return res.status(err.status).json({ message: err.message })
         if (err?.code === 'ER_DUP_ENTRY') {
-          return res.status(409).json({
-            message:
-              'Duplicate assignment for this activity. If this happened on a new activity, run the migration that removes UNIQUE(activity_id) from activity_assignments.'
-          })
+          return res.status(409).json({ message: 'Duplicate assignment for this activity and section' })
         }
         console.error('POST /api/activities error:', err)
 

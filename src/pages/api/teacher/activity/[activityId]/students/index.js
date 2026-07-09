@@ -1,279 +1,265 @@
-// pages/api/teacher/activity/[activityId]/students.js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../../../auth/[...nextauth]'
 import db from '../../../../db'
-import { getCurrentSchoolYearId } from '../../../../lib/schoolYear'
+import { resolveSchoolYearId } from '../../../../lib/schoolYear'
 
-/**
- * GET /api/teacher/activity/:activityId/students
- * Query: section_id (optional to target one section if an activity covers multiple)
- *        page, page_size, search (by name or LRN)
- * Returns student rows plus attendance/payment for the activity_assignment.
- */
+function parseParentIds(raw) {
+  return String(raw || '')
+    .split(',')
+    .map(v => Number(v.trim()))
+    .filter(v => Number.isInteger(v) && v > 0)
+}
+
+function toPositiveInt(value, fallback = null) {
+  const n = Number(value)
+  return Number.isInteger(n) && n > 0 ? n : fallback
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
-  const session = await getServerSession(req, res, authOptions)
-  if (!session || session.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' })
-
-  const teacherId = session.user.id
-  const activityId = Number(req.query.activityId)
-  const sectionId = req.query.section_id ? Number(req.query.section_id) : null
-  const page = Math.max(1, Number(req.query.page ?? 1))
-  const pageSize = Math.min(200, Math.max(1, Number(req.query.page_size ?? 50)))
-  const search = (req.query.search ?? '').trim()
-  const syId = await getCurrentSchoolYearId()
 
   try {
-    // Validate teacher visibility: created_by or assigned section
-    const [visible] = await db.query(
-      `
-      SELECT DISTINCT a.id
-      FROM activities a
-      LEFT JOIN activity_assignments aa ON aa.activity_id = a.id
-      LEFT JOIN teacher_sections ts ON ts.section_id = aa.section_id AND ts.school_year_id = ?
-      WHERE a.id = ?
-        AND (a.created_by = ? OR ts.user_id = ?)
-        AND a.is_deleted = 0
-        AND a.school_year_id = ?
-        AND ts.is_active = 1
-    `,
-      [syId, activityId, teacherId, teacherId, syId]
-    )
+    const session = await getServerSession(req, res, authOptions)
+    if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+    if (session.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' })
 
-    if (visible.length === 0) return res.status(404).json({ message: 'Activity not found' })
+    const teacherId = Number(session.user.id)
+    const activityId = toPositiveInt(req.query.activityId)
+    const sectionId = toPositiveInt(req.query.section_id)
+    const syId = await resolveSchoolYearId(req)
+    const page = Math.max(1, toPositiveInt(req.query.page, 1))
+    const pageSize = Math.min(1000, Math.max(1, toPositiveInt(req.query.page_size, 50)))
+    const offset = (page - 1) * pageSize
+    const search = String(req.query.search || '').trim()
+    const like = `%${search}%`
+    const parentIds = parseParentIds(req.query.parent_ids)
 
-    // Build list of activity_assignment_ids the teacher can view
-    const params = [activityId, teacherId, syId]
-    let aaWhere = ' WHERE aa.activity_id = ? AND ts.user_id = ? AND ts.school_year_id = ? AND ts.is_active = 1'
+    if (!activityId) return res.status(400).json({ message: 'Invalid activity id' })
+
+    const assignmentParams = [activityId, teacherId, syId]
+    const assignmentWhere = ['aa.activity_id = ?', 'ts.user_id = ?', 'ts.school_year_id = ?', 'ts.is_active = 1', 'a.is_deleted = 0', 'a.school_year_id = ?']
+    assignmentParams.push(syId)
+
     if (sectionId) {
-      aaWhere += ' AND aa.section_id = ?'
-      params.push(sectionId)
+      assignmentWhere.push('aa.section_id = ?')
+      assignmentParams.push(sectionId)
     }
 
     const [assignments] = await db.query(
-      `
-      SELECT aa.id AS activity_assignment_id, aa.section_id, s.name AS section_name, s.grade_id, g.name AS grade_name
-      FROM activity_assignments aa
-      JOIN sections s ON s.id = aa.section_id
-      JOIN grades g   ON g.id = s.grade_id
-      JOIN teacher_sections ts ON ts.section_id = aa.section_id
-      ${aaWhere}
-    `,
-      params
+      `SELECT
+          aa.id AS activity_assignment_id,
+          aa.section_id,
+          aa.grade_id,
+          s.name AS section_name,
+          g.name AS grade_name,
+          a.id AS activity_id,
+          a.title,
+          DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date,
+          a.fee_type,
+          a.fee_amount,
+          a.payments_enabled
+         FROM activity_assignments aa
+         JOIN activities a ON a.id = aa.activity_id
+         JOIN sections s ON s.id = aa.section_id
+         JOIN grades g ON g.id = aa.grade_id
+         JOIN teacher_sections ts
+           ON ts.section_id = aa.section_id
+          AND ts.school_year_id = aa.school_year_id
+        WHERE ${assignmentWhere.join(' AND ')}
+        ORDER BY g.id, s.name`,
+      assignmentParams
     )
-    if (assignments.length === 0) return res.status(200).json({ students: [], total: 0 })
 
-    // If multiple sections, aggregate students across them; we'll return a flat list with section fields
-    const aaIds = assignments.map(a => a.activity_assignment_id)
+    if (!assignments.length) {
+      return res.status(200).json({
+        students: [],
+        total: 0,
+        page,
+        page_size: pageSize,
+        school_year_id: syId,
+        assignments: []
+      })
+    }
 
-    // Count for pagination
-    const like = `%${search}%`
+    const sectionIds = assignments.map(a => a.section_id)
+    const assignmentIds = assignments.map(a => a.activity_assignment_id)
+    const assignmentBySection = new Map(assignments.map(a => [Number(a.section_id), a]))
 
-    const [countRows] = await db.query(
-      `
-        SELECT COUNT(*) AS total
-        FROM student_enrollments se
-        JOIN students st ON st.id = se.student_id AND st.is_deleted = 0
-        WHERE se.section_id IN (${assignments.map(() => '?').join(',')})
-          AND se.school_year_id = ?
-          ${search ? 'AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)' : ''}
-      `,
-      search
-        ? [...assignments.map(a => a.section_id), syId, like, like, like]
-        : [...assignments.map(a => a.section_id), syId]
+    const studentWhere = [
+      `en.school_year_id = ?`,
+      `en.status = 'active'`,
+      `en.section_id IN (${sectionIds.map(() => '?').join(',')})`,
+      `st.is_deleted = 0`
+    ]
+    const baseParams = [syId, ...sectionIds]
+
+    if (search) {
+      studentWhere.push('(st.first_name LIKE ? OR st.last_name LIKE ? OR CONCAT(st.first_name, " ", st.last_name) LIKE ? OR st.lrn LIKE ?)')
+      baseParams.push(like, like, like, like)
+    }
+
+    if (parentIds.length) {
+      studentWhere.push(`EXISTS (
+        SELECT 1
+          FROM student_parents sp_filter
+         WHERE sp_filter.student_id = st.id
+           AND sp_filter.parent_id IN (${parentIds.map(() => '?').join(',')})
+      )`)
+      baseParams.push(...parentIds)
+    }
+
+    const [[countRow]] = await db.query(
+      `SELECT COUNT(DISTINCT st.id) AS total
+         FROM student_enrollments en
+         JOIN students st ON st.id = en.student_id
+        WHERE ${studentWhere.join(' AND ')}`,
+      baseParams
     )
-    const total = countRows[0]?.total ?? 0
 
-    // Page rows with enhanced data
-    const offset = (page - 1) * pageSize
-
-    const [rows] = await db.query(
-      `
-        SELECT
+    const [students] = await db.query(
+      `SELECT
           st.id,
           st.lrn,
           st.first_name,
           st.last_name,
           st.picture_url,
-          se.grade_id,
-          se.section_id,
-          s.name AS section_name,
-          g.name AS grade_name
-        FROM student_enrollments se
-        JOIN students st ON st.id = se.student_id AND st.is_deleted = 0
-        JOIN sections s  ON s.id = se.section_id
-        JOIN grades g    ON g.id = se.grade_id
-        WHERE se.section_id IN (${assignments.map(() => '?').join(',')})
-          AND se.school_year_id = ?
-          ${search ? 'AND (st.first_name LIKE ? OR st.last_name LIKE ? OR st.lrn LIKE ?)' : ''}
-        ORDER BY st.last_name ASC, st.first_name ASC
-        LIMIT ? OFFSET ?
-      `,
-      search
-        ? [...assignments.map(a => a.section_id), syId, like, like, like, pageSize, offset]
-        : [...assignments.map(a => a.section_id), syId, pageSize, offset]
+          en.grade_id,
+          en.section_id,
+          g.name AS grade_name,
+          s.name AS section_name
+         FROM student_enrollments en
+         JOIN students st ON st.id = en.student_id
+         JOIN grades g ON g.id = en.grade_id
+         JOIN sections s ON s.id = en.section_id
+        WHERE ${studentWhere.join(' AND ')}
+        ORDER BY g.id, s.name, st.last_name, st.first_name
+        LIMIT ? OFFSET ?`,
+      [...baseParams, pageSize, offset]
     )
 
-    // Attendance + payments for each student per its matching activity_assignment
-    // Build map: section_id -> aa_id
-    const mapSectionToAa = new Map()
-    assignments.forEach(a => mapSectionToAa.set(a.section_id, a.activity_assignment_id))
-
-    const studentIds = rows.map(r => r.id)
-    let attendanceMap = new Map()
-    let paymentMap = new Map()
-    let contribMap = new Map()
+    const studentIds = students.map(s => s.id)
+    const attendanceMap = new Map()
+    const paymentMap = new Map()
+    const contribMap = new Map()
+    const parentsMap = new Map()
 
     if (studentIds.length) {
-      // Get attendance data
-      const [attRows] = await db.query(
-        `
-        SELECT
-          at.student_id,
-          at.parent_present,
-          at.status,
-          at.marked_at,
-          aa.section_id,
-          u.full_name as marked_by_name
-        FROM attendance at
-        JOIN activity_assignments aa ON aa.id = at.activity_assignment_id
-        LEFT JOIN users u ON u.id = at.marked_by
-        WHERE aa.id IN (${aaIds.map(() => '?').join(',')})
-          AND at.student_id IN (${studentIds.map(() => '?').join(',')})
-      `,
-        [...aaIds, ...studentIds]
+      const [attendanceRows] = await db.query(
+        `SELECT
+            at.student_id,
+            aa.section_id,
+            at.status,
+            at.parent_present,
+            DATE_FORMAT(at.marked_at, '%Y-%m-%d %H:%i:%s') AS marked_at
+           FROM attendance at
+           JOIN activity_assignments aa ON aa.id = at.activity_assignment_id
+          WHERE at.activity_assignment_id IN (${assignmentIds.map(() => '?').join(',')})
+            AND at.student_id IN (${studentIds.map(() => '?').join(',')})`,
+        [...assignmentIds, ...studentIds]
       )
-      attendanceMap = new Map(
-        attRows.map(r => [
-          `${r.student_id}:${r.section_id}`,
-          {
-            status: r.status,
-            parent_present: !!r.parent_present,
-            marked_at: r.marked_at,
-            marked_by_name: r.marked_by_name
-          }
-        ])
-      )
+      for (const row of attendanceRows) attendanceMap.set(`${row.student_id}:${row.section_id}`, row)
 
-      // Get payment data
-      const [payRows] = await db.query(
-        `
-        SELECT
-          p.student_id,
-          p.paid,
-          p.payment_date,
-          p.marked_at as payment_marked_at,
-          aa.section_id,
-          u.full_name as payment_marked_by_name
-        FROM payments p
-        JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
-        LEFT JOIN users u ON u.id = p.marked_by
-        WHERE aa.id IN (${aaIds.map(() => '?').join(',')})
-          AND p.student_id IN (${studentIds.map(() => '?').join(',')})
-      `,
-        [...aaIds, ...studentIds]
+      const [paymentRows] = await db.query(
+        `SELECT
+            p.student_id,
+            aa.section_id,
+            p.paid,
+            p.amount,
+            DATE_FORMAT(p.payment_date, '%Y-%m-%d') AS payment_date
+           FROM payments p
+           JOIN activity_assignments aa ON aa.id = p.activity_assignment_id
+          WHERE p.activity_assignment_id IN (${assignmentIds.map(() => '?').join(',')})
+            AND p.student_id IN (${studentIds.map(() => '?').join(',')})`,
+        [...assignmentIds, ...studentIds]
       )
-      paymentMap = new Map(
-        payRows.map(r => [
-          `${r.student_id}:${r.section_id}`,
-          {
-            paid: !!r.paid,
-            payment_date: r.payment_date,
-            payment_marked_at: r.payment_marked_at,
-            payment_marked_by_name: r.payment_marked_by_name
-          }
-        ])
-      )
+      for (const row of paymentRows) paymentMap.set(`${row.student_id}:${row.section_id}`, row)
 
-      // Contributions (aggregate per student)
       const [contribRows] = await db.query(
-        `
-            SELECT
-              c.student_id,
-              aa.section_id,
-              COUNT(*) AS contrib_count,
-              COALESCE(SUM(c.hours_worked),0) AS hours_total,
-              COALESCE(SUM(c.estimated_value),0) AS value_total
-            FROM contributions c
-            JOIN activity_assignments aa ON aa.id = c.activity_assignment_id
-            WHERE aa.id IN (${aaIds.map(() => '?').join(',')})
-              AND c.student_id IN (${studentIds.map(() => '?').join(',')})
-            GROUP BY c.student_id, aa.section_id
-          `,
-        [...aaIds, ...studentIds]
+        `SELECT
+            c.student_id,
+            aa.section_id,
+            COUNT(*) AS contrib_count,
+            COALESCE(SUM(c.hours_worked), 0) AS contrib_hours_total,
+            COALESCE(SUM(c.estimated_value), 0) AS contrib_estimated_total
+           FROM contributions c
+           JOIN activity_assignments aa ON aa.id = c.activity_assignment_id
+          WHERE c.activity_assignment_id IN (${assignmentIds.map(() => '?').join(',')})
+            AND c.student_id IN (${studentIds.map(() => '?').join(',')})
+          GROUP BY c.student_id, aa.section_id`,
+        [...assignmentIds, ...studentIds]
       )
-      contribMap = new Map(
-        contribRows.map(r => [
-          `${r.student_id}:${r.section_id}`,
-          {
-            count: Number(r.contrib_count || 0),
-            hours_total: Number(r.hours_total || 0),
-            value_total: Number(r.value_total || 0)
-          }
-        ])
+      for (const row of contribRows) contribMap.set(`${row.student_id}:${row.section_id}`, row)
+
+      const [parentRows] = await db.query(
+        `SELECT
+            sp.student_id,
+            sp.relation,
+            p.first_name,
+            p.last_name,
+            p.contact_info
+           FROM student_parents sp
+           JOIN parents p ON p.id = sp.parent_id AND p.is_deleted = 0
+          WHERE sp.student_id IN (${studentIds.map(() => '?').join(',')})
+          ORDER BY sp.student_id, sp.relation, p.last_name, p.first_name`,
+        studentIds
       )
-    }
-
-    // Parents per student
-    const [parentRows] = await db.query(
-      `
-      SELECT
-        sp.student_id,
-        sp.relation,
-        p.first_name,
-        p.last_name,
-        p.contact_info
-      FROM student_parents sp
-      JOIN parents p ON p.id = sp.parent_id
-      WHERE sp.student_id IN (${studentIds.length ? studentIds.map(() => '?').join(',') : 'NULL'})
-        AND p.is_deleted = 0
-      ORDER BY sp.student_id, sp.relation
-    `,
-      studentIds.length ? studentIds : []
-    )
-
-    const parentsByStudent = new Map()
-    for (const r of parentRows) {
-      const arr = parentsByStudent.get(r.student_id) || []
-
-      const parentInfo = {
-        name: `${r.first_name} ${r.last_name}`,
-        relation: r.relation,
-        contact_info: r.contact_info
+      for (const row of parentRows) {
+        const arr = parentsMap.get(row.student_id) || []
+        arr.push({
+          name: `${row.first_name} ${row.last_name}`,
+          relation: row.relation,
+          contact_info: row.contact_info
+        })
+        parentsMap.set(row.student_id, arr)
       }
-      arr.push(parentInfo)
-      parentsByStudent.set(r.student_id, arr)
     }
 
-    const out = rows.map(r => {
-      const aaId = mapSectionToAa.get(r.section_id)
-      const att = attendanceMap.get(`${r.id}:${r.section_id}`) || null
-      const pay = paymentMap.get(`${r.id}:${r.section_id}`) || null
-      const con = contribMap.get(`${r.id}:${r.section_id}`) || { count: 0, hours_total: 0, value_total: 0 }
-      const parentsList = parentsByStudent.get(r.id) || []
+    const output = students.map(student => {
+      const assignment = assignmentBySection.get(Number(student.section_id))
+      const key = `${student.id}:${student.section_id}`
+      const att = attendanceMap.get(key)
+      const pay = paymentMap.get(key)
+      const contrib = contribMap.get(key)
+      const parents = parentsMap.get(student.id) || []
 
       return {
-        ...r,
-        parents: parentsList.map(p => p.name).join(', '),
-        parents_details: parentsList,
-        attendance_status: att?.status ?? null,
-        parent_present: att?.parent_present ?? false,
-        attendance_marked_at: att?.marked_at ?? null,
-        attendance_marked_by: att?.marked_by_name ?? null,
-        contrib_count: con.count,
-        contrib_hours_total: con.hours_total,
-        contrib_estimated_total: con.value_total,
-        payment_paid: pay?.paid ?? null,
-        payment_date: pay?.payment_date ?? null,
-        payment_marked_at: pay?.payment_marked_at ?? null,
-        payment_marked_by: pay?.payment_marked_by_name ?? null,
-        activity_assignment_id: aaId
+        ...student,
+        activity_assignment_id: assignment?.activity_assignment_id || null,
+        activity_id: assignment?.activity_id || activityId,
+        attendance_status: att?.status || null,
+        parent_present: att ? !!att.parent_present : false,
+        attendance_marked_at: att?.marked_at || null,
+        payment_paid: pay ? !!pay.paid : null,
+        payment_amount: pay?.amount == null ? null : Number(pay.amount),
+        payment_date: pay?.payment_date || null,
+        contrib_count: Number(contrib?.contrib_count || 0),
+        contrib_hours_total: Number(contrib?.contrib_hours_total || 0),
+        contrib_estimated_total: Number(contrib?.contrib_estimated_total || 0),
+        parents: parents.map(p => p.name).join(', '),
+        parents_details: parents
       }
     })
 
-    return res.status(200).json({ students: out, total })
+    return res.status(200).json({
+      students: output,
+      total: Number(countRow?.total || 0),
+      page,
+      page_size: pageSize,
+      school_year_id: syId,
+      assignments,
+      activity: assignments[0]
+        ? {
+            id: assignments[0].activity_id,
+            title: assignments[0].title,
+            activity_date: assignments[0].activity_date,
+            fee_type: assignments[0].fee_type,
+            fee_amount: assignments[0].fee_amount,
+            payments_enabled: assignments[0].payments_enabled
+          }
+        : null
+    })
   } catch (err) {
-    console.error('activity students error', err)
+    console.error('GET /api/teacher/activity/:activityId/students error:', err)
 
     return res.status(500).json({ message: 'Internal server error' })
   }

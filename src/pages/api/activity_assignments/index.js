@@ -9,6 +9,7 @@ export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+    if (!['admin', 'teacher'].includes(session.user.role)) return res.status(403).json({ message: 'Forbidden' })
 
     const syId = await resolveSchoolYearId(req)
 
@@ -17,8 +18,8 @@ export default async function handler(req, res) {
       const limit = Math.max(1, Math.min(1000, Number(page_size) || 50))
       const offset = (Math.max(1, Number(page) || 1) - 1) * limit
 
-      const where = ['a.school_year_id = ?', 'aa.school_year_id = ?', 'a.is_deleted = 0', 's.is_deleted = 0']
-      const params = [syId, syId]
+      const where = ['a.school_year_id = ?', 'aa.school_year_id = a.school_year_id', 'a.is_deleted = 0', 's.is_deleted = 0']
+      const params = [syId]
 
       if (activity_id) {
         where.push('aa.activity_id = ?')
@@ -37,11 +38,11 @@ export default async function handler(req, res) {
           SELECT 1
             FROM teacher_sections ts
            WHERE ts.user_id = ?
-             AND ts.school_year_id = ?
+             AND ts.school_year_id = a.school_year_id
              AND ts.is_active = 1
              AND ts.section_id = aa.section_id
         )`)
-        params.push(session.user.id, syId)
+        params.push(session.user.id)
       }
 
       const whereSql = `WHERE ${where.join(' AND ')}`
@@ -124,8 +125,6 @@ export default async function handler(req, res) {
           [session.user.id, sectionId, syId]
         )
         if (!ok) return res.status(403).json({ message: 'Forbidden: cannot assign activity to this section' })
-      } else if (session.user.role !== 'admin') {
-        return res.status(403).json({ message: 'Forbidden' })
       }
 
       try {

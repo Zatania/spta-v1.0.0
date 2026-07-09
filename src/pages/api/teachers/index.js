@@ -10,6 +10,10 @@ export default async function handler(req, res) {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
+    if (req.method === 'GET' && session.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Admins only' })
+    }
+
     if (req.method === 'GET') {
       const syId = await resolveSchoolYearId(req)
       const { search = '', grade_id = '', section_id = '', assignment = '', page = 1, page_size = 25 } = req.query
@@ -78,7 +82,9 @@ export default async function handler(req, res) {
         [...params, limit, offset]
       )
 
-      return res.status(200).json({ total: countRows[0]?.total || 0, page: Number(page), page_size: limit, teachers: rows })
+      return res
+        .status(200)
+        .json({ total: countRows[0]?.total || 0, page: Number(page), page_size: limit, teachers: rows })
     }
 
     if (req.method === 'POST') {
@@ -105,6 +111,7 @@ export default async function handler(req, res) {
         await conn.beginTransaction()
 
         const passwordHash = await bcrypt.hash(password, 10)
+
         const [insertUser] = await conn.query(
           `INSERT INTO users (full_name, email, username, password_hash, is_deleted, created_at, updated_at)
            VALUES (?, ?, ?, ?, 0, NOW(), NOW())`,

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../../auth/[...nextauth]'
 import db from '../../../db'
 import { getCurrentSchoolYearId, getNextSchoolYearId } from '../../../lib/schoolYear'
+import { auditLog } from '../../../lib/audit'
 
 export default async function handler(req, res) {
   const studentId = Number(req.query.id)
@@ -82,6 +83,23 @@ export default async function handler(req, res) {
          VALUES (?, ?, ?, ?, 'active', NOW())
          ON DUPLICATE KEY UPDATE grade_id = VALUES(grade_id), section_id = VALUES(section_id), status = 'active'`,
         [studentId, nextSyId, to_grade_id, to_section_id]
+      )
+
+      await auditLog(
+        {
+          actorUserId: session.user.id,
+          action: 'student.promote',
+          entityType: 'student',
+          entityId: studentId,
+          details: {
+            from_school_year_id: currentSyId,
+            to_school_year_id: nextSyId,
+            to_grade_id,
+            to_section_id,
+            mark_previous_as
+          }
+        },
+        conn
       )
 
       await conn.commit()

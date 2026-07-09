@@ -123,6 +123,21 @@ export default async function handler(req, res) {
       ]
     )
 
+    await auditLog({
+      actorUserId: session.user.id,
+      action: 'student_enrollment.status_update',
+      entityType: 'student_enrollment',
+      entityId: enrollmentId,
+      details: {
+        student_id: en.student_id,
+        school_year_id: en.school_year_id,
+        status,
+        completion_school_year_id: status === 'completed' ? compSyId : null,
+        completion_grade_id: status === 'completed' ? compGradeId : null,
+        completion_section_id: status === 'completed' ? compSecId : null
+      }
+    })
+
     return res.status(200).json({ ok: true })
   } catch (err) {
     console.error('Set status error:', err)

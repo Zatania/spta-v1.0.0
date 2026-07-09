@@ -20,9 +20,11 @@ import {
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import VisibilityIcon from '@mui/icons-material/Visibility'
 import { DataGrid } from '@mui/x-data-grid'
 import axios from 'axios'
 import { useSession } from 'next-auth/react'
+import ActivityScopeDialog from 'src/components/activities/ActivityScopeDialog'
 
 export default function ActivitiesPage() {
   const { data: session } = useSession()
@@ -51,7 +53,7 @@ export default function ActivitiesPage() {
     created_by: null,
 
     // admin-only
-    apply_all_grades: true,
+    apply_all_grades: false,
     selected_grade_ids: [],
 
     // teacher-only
@@ -60,6 +62,7 @@ export default function ActivitiesPage() {
 
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
+  const [scopeActivityId, setScopeActivityId] = useState(null)
 
   useEffect(() => {
     fetchMyInfo()
@@ -120,7 +123,7 @@ export default function ActivitiesPage() {
     if (isAdmin) {
       base.fee_type = 'none'
       base.fee_amount = ''
-      base.apply_all_grades = true
+      base.apply_all_grades = false
       base.selected_grade_ids = []
     }
 
@@ -128,27 +131,38 @@ export default function ActivitiesPage() {
     setOpen(true)
   }
 
-  const openEdit = row => {
+  const openEdit = async row => {
     const canEdit =
       row.can_edit ?? (session?.user?.role === 'admin' || Number(row.created_by) === Number(session?.user?.id))
+
     if (!canEdit) {
       alert('You can only edit activities you created.')
 
       return
     }
-    setForm({
-      ...emptyForm,
-      id: row.id,
-      title: row.title,
-      activity_date: row.activity_date,
-      payments_enabled: !!row.payments_enabled,
-      fee_type: row.fee_type || 'none',
-      fee_amount: row.fee_amount ?? '',
-      created_by: row.created_by
 
-      // We intentionally do not re-open assignment scope in this dialog.
-    })
-    setOpen(true)
+    try {
+      const { data } = await axios.get(`/api/activities/${row.id}`)
+
+      setForm({
+        ...emptyForm,
+        id: data.id,
+        title: data.title,
+        activity_date: data.activity_date,
+        payments_enabled: !!data.payments_enabled,
+        fee_type: data.fee_type || 'none',
+        fee_amount: data.fee_amount ?? '',
+        created_by: data.created_by,
+        apply_all_grades: data.assignment_mode === 'ALL',
+        selected_grade_ids: Array.isArray(data.selected_grade_ids) ? data.selected_grade_ids.map(String) : [],
+        section_id: data.section_id ? String(data.section_id) : ''
+      })
+
+      setOpen(true)
+    } catch (err) {
+      console.error('Failed to load activity details', err)
+      alert(err?.response?.data?.message || 'Failed to load activity details')
+    }
   }
 
   const saveActivity = async () => {
@@ -177,6 +191,12 @@ export default function ActivitiesPage() {
             ? Number(form.fee_amount)
             : null
           : null
+
+      if (!form.apply_all_grades && !form.selected_grade_ids.length) {
+        alert('Please select at least one grade or check Apply to ALL grades.')
+
+        return
+      }
 
       payload.fee_type = ft
       payload.fee_amount = fa
@@ -340,7 +360,7 @@ export default function ActivitiesPage() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 160,
+      width: 210,
       renderCell: params => {
         const canEdit =
           params.row.can_edit ??
@@ -348,6 +368,13 @@ export default function ActivitiesPage() {
 
         return (
           <Stack direction='row' spacing={1}>
+            {isAdmin && (
+              <Tooltip title='View assigned grade/section scope'>
+                <IconButton size='small' onClick={() => setScopeActivityId(params.row.id)}>
+                  <VisibilityIcon fontSize='small' />
+                </IconButton>
+              </Tooltip>
+            )}
             <Tooltip title='Edit'>
               <IconButton size='small' onClick={() => openEdit(params.row)} disabled={!canEdit}>
                 <EditIcon fontSize='small' />
@@ -516,6 +543,12 @@ export default function ActivitiesPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <ActivityScopeDialog
+        open={!!scopeActivityId}
+        activityId={scopeActivityId}
+        onClose={() => setScopeActivityId(null)}
+      />
     </Box>
   )
 }

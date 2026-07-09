@@ -70,10 +70,11 @@ export default async function handler(req, res) {
                AND tsx.user_id <> ?
            )`
         : `NOT EXISTS (
-             SELECT 1 FROM teacher_sections tsx
-             WHERE tsx.section_id = s.id
-               AND tsx.school_year_id = ?
-           )`
+            SELECT 1 FROM teacher_sections tsx
+            WHERE tsx.section_id = s.id
+              AND tsx.school_year_id = ?
+              AND tsx.is_active = 1
+          )`
 
       const whereSql = 'WHERE ' + [...where, teacherFilterSql].join(' AND ')
 

@@ -11,6 +11,7 @@ export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+    if (!['admin', 'teacher'].includes(session.user.role)) return res.status(403).json({ message: 'Forbidden' })
 
     const page = Math.max(1, Number(req.query.page || 1))
     const pageSize = Math.max(1, Math.min(1000, Number(req.query.page_size || 500)))
@@ -29,7 +30,7 @@ export default async function handler(req, res) {
           a.title,
           DATE_FORMAT(a.activity_date, '%Y-%m-%d') AS activity_date
          FROM activity_assignments aa
-         JOIN activities a ON a.id = aa.activity_id
+         JOIN activities a ON a.id = aa.activity_id AND a.school_year_id = aa.school_year_id
         WHERE aa.id = ?
           AND a.is_deleted = 0
         LIMIT 1`,

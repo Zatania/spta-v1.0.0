@@ -5,7 +5,7 @@ import db from '../../../db'
 import PDFDocument from 'pdfkit'
 import fs from 'fs'
 import path from 'path'
-import { getCurrentSchoolYearId } from '../../../lib/schoolYear'
+import { resolveSchoolYearId } from '../../../lib/schoolYear'
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ message: 'Method not allowed' })
@@ -24,7 +24,7 @@ export default async function handler(req, res) {
     .filter(n => !isNaN(n))
 
   try {
-    const syId = await getCurrentSchoolYearId()
+    const syId = await resolveSchoolYearId(req)
 
     // Access check: current SY; includes admin "general" activities as long as they're assigned to the teacher's section.
     const [activityRows] = await db.query(

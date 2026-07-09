@@ -13,7 +13,7 @@ async function getAssignment(assignmentId) {
         a.school_year_id,
         a.title
        FROM activity_assignments aa
-       JOIN activities a ON a.id = aa.activity_id AND a.is_deleted = 0
+       JOIN activities a ON a.id = aa.activity_id AND a.school_year_id = aa.school_year_id AND a.is_deleted = 0
       WHERE aa.id = ?
       LIMIT 1`,
     [assignmentId]
@@ -38,7 +38,7 @@ async function validateTeacherAccess(userId, sectionId, schoolYearId) {
 }
 
 async function validateStudents(records, assignment) {
-  const submittedStudentIds = [...new Set(records.map(r => Number(r.student_id)).filter(Number.isFinite))]
+  const submittedStudentIds = [...new Set(records.map(r => Number(r.student_id)).filter(Number.isInteger))]
   if (!submittedStudentIds.length) return { valid: false, message: 'No valid student IDs submitted' }
 
   const placeholders = submittedStudentIds.map(() => '?').join(',')

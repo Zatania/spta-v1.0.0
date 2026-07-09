@@ -22,6 +22,7 @@ import { DataGrid } from '@mui/x-data-grid'
 import axios from 'axios'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import dayjs from 'dayjs'
+import SchoolYearSelect from 'src/components/common/SchoolYearSelect'
 
 const CONTRIB_TYPES = [
   { value: '', label: '— Select —' },
@@ -32,6 +33,7 @@ const CONTRIB_TYPES = [
 ]
 
 export default function AttendancePage() {
+  const [schoolYearId, setSchoolYearId] = useState('')
   const [assignments, setAssignments] = useState([])
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(0)
@@ -48,15 +50,16 @@ export default function AttendancePage() {
   const [savingContribs, setSavingContribs] = useState(false)
 
   useEffect(() => {
-    fetchAssignments()
-  }, [page, pageSize])
+    if (schoolYearId) fetchAssignments()
+  }, [page, pageSize, schoolYearId])
 
   const fetchAssignments = async (opts = {}) => {
     setLoading(true)
     try {
       const params = {
         page: (opts.page ?? page) + 1,
-        page_size: opts.pageSize ?? pageSize
+        page_size: opts.pageSize ?? pageSize,
+        school_year_id: schoolYearId || undefined
       }
       Object.keys(params).forEach(k => (params[k] == null || params[k] === '') && delete params[k])
       const res = await axios.get('/api/activity_assignments', { params })
@@ -73,7 +76,9 @@ export default function AttendancePage() {
     setActiveAssignment(assignment)
     setDialogOpen(true)
     try {
-      const res = await axios.get(`/api/activity_assignments/${assignment.id}/students`)
+      const res = await axios.get(`/api/activity_assignments/${assignment.id}/students`, {
+        params: { school_year_id: schoolYearId || undefined }
+      })
 
       const s = (res.data.students ?? []).map(st => ({
         ...st,
@@ -236,7 +241,9 @@ export default function AttendancePage() {
   }
 
   const refreshStudents = async () => {
-    const res = await axios.get(`/api/activity_assignments/${activeAssignment.id}/students`)
+    const res = await axios.get(`/api/activity_assignments/${activeAssignment.id}/students`, {
+      params: { school_year_id: schoolYearId || undefined }
+    })
 
     const s = (res.data.students ?? []).map(st => ({
       ...st,
@@ -466,6 +473,8 @@ export default function AttendancePage() {
     <Box p={3}>
       <Box display='flex' alignItems='center' mb={2}>
         <Typography variant='h5'>Attendance & Contributions</Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        <SchoolYearSelect value={schoolYearId} onChange={value => { setPage(0); setSchoolYearId(value) }} />
       </Box>
 
       <div style={{ height: 600, width: '100%' }}>

@@ -40,6 +40,7 @@ import dayjs from 'dayjs'
 import { useRouter } from 'next/router'
 import axios from 'axios'
 import { Bar } from 'react-chartjs-2'
+import SchoolYearSelect from 'src/components/common/SchoolYearSelect'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -66,6 +67,7 @@ export default function TeacherDashboard() {
   const [pdfLoading, setPdfLoading] = useState(false)
   const [pdfError, setPdfError] = useState('')
   const [previewEndpoint, setPreviewEndpoint] = useState('')
+  const [schoolYearId, setSchoolYearId] = useState('')
   const router = useRouter()
 
   const attendanceDetailsRef = useRef(null)
@@ -84,7 +86,8 @@ export default function TeacherDashboard() {
     try {
       const { data } = await axios.get('/api/teacher/attendance-summary', {
         params: {
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
 
@@ -120,7 +123,8 @@ export default function TeacherDashboard() {
         params: {
           page: 1,
           page_size: 1000, // Get all students for the selected activity
-          parent_ids: parentIdsParam()
+          parent_ids: parentIdsParam(),
+          school_year_id: schoolYearId || undefined
         }
       })
       setStudents(data.students || [])
@@ -177,25 +181,18 @@ export default function TeacherDashboard() {
     fetchParents() // preload parent options
   }, [])
 
-  // Refresh summary when parent filter changes
+  // Refresh summary when parent filter or school year changes
   useEffect(() => {
+    if (!schoolYearId) return
     fetchSummary()
 
-    // if an activity is selected, re-fetch its students using the new filter
     if (selectedActivity) {
       fetchStudents(selectedActivity.id)
     }
 
-    // also update pupils listing
     fetchPupilsForParents(parentFilter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentFilter])
-
-  useEffect(() => {
-    // initial summary load
-    fetchSummary()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [parentFilter, schoolYearId])
 
   const handleActivitySelect = activity => {
     setSelectedActivity(activity)
@@ -341,7 +338,7 @@ export default function TeacherDashboard() {
     try {
       const url = `/api/teacher/reports/attendance?activity_id=${selectedActivity.id}&parent_ids=${
         parentIdsParam() || ''
-      }`
+      }&school_year_id=${schoolYearId || ''}`
       const resp = await fetch(url)
 
       if (!resp.ok) {
@@ -622,6 +619,14 @@ export default function TeacherDashboard() {
 
   return (
     <Box p={3}>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <Box>
+          <Typography variant='h5'>Teacher Dashboard</Typography>
+          <Typography variant='body2' color='text.secondary'>Filter reports by school year and parent.</Typography>
+        </Box>
+        <SchoolYearSelect value={schoolYearId} onChange={setSchoolYearId} />
+      </Box>
+
       {/* Top parent filters */}
       {renderTopFilters()}
       {renderSelectedParentsPupils()}

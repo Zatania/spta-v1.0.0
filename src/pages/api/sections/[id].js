@@ -38,6 +38,30 @@ export default async function handler(req, res) {
       const conn = await db.getConnection()
       try {
         await conn.beginTransaction()
+        const [[currentSection]] = await db.query('SELECT id, grade_id FROM sections WHERE id = ? LIMIT 1', [sectionId])
+        if (!currentSection) return res.status(404).json({ message: 'Section not found' })
+
+        if (Number(currentSection.grade_id) !== Number(grade_id)) {
+          const [[usage]] = await db.query(
+            `SELECT
+                (SELECT COUNT(*) FROM student_enrollments WHERE section_id = ?) AS enrollments,
+                (SELECT COUNT(*) FROM activity_assignments WHERE section_id = ?) AS activity_assignments,
+                (SELECT COUNT(*) FROM teacher_sections WHERE section_id = ?) AS teacher_assignments`,
+            [sectionId, sectionId, sectionId]
+          )
+
+          if (
+            Number(usage.enrollments || 0) > 0 ||
+            Number(usage.activity_assignments || 0) > 0 ||
+            Number(usage.teacher_assignments || 0) > 0
+          ) {
+            return res.status(409).json({
+              message:
+                'Cannot change the grade of a section that already has enrollments, activities, or teacher assignment history. Create a new section instead.',
+              usage
+            })
+          }
+        }
         await conn.query(
           'UPDATE sections SET grade_id = ?, name = ?, updated_at = NOW(), is_deleted = 0, deleted_at = NULL WHERE id = ?',
           [grade_id, name, sectionId]

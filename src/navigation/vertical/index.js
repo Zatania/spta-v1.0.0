@@ -49,6 +49,10 @@ const navigation = () => {
           path: '/attendance',
           action: 'read',
           subject: 'attendance-page'
+        },
+        {
+          title: 'Audit Logs',
+          path: '/audit-logs'
         }
       ]
     }

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../../../auth/[...nextauth]'
 import db from '../../../db'
 import { getCurrentSchoolYearId } from '../../../lib/schoolYear'
+import { auditLog } from '../../../lib/audit'
 
 export default async function handler(req, res) {
   const studentId = Number(req.query.id)
@@ -63,6 +64,14 @@ export default async function handler(req, res) {
       'UPDATE student_enrollments SET grade_id = ?, section_id = ? WHERE student_id = ? AND school_year_id = ?',
       [to_grade_id, to_section_id, studentId, syId]
     )
+
+    await auditLog({
+      actorUserId: session.user.id,
+      action: 'student.transfer',
+      entityType: 'student',
+      entityId: studentId,
+      details: { school_year_id: syId, to_grade_id, to_section_id }
+    })
 
     return res.status(200).json({ message: 'Student transferred' })
   } catch (err) {

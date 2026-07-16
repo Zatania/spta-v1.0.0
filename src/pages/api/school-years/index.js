@@ -3,6 +3,22 @@ import { authOptions } from '../auth/[...nextauth]'
 import db from '../db'
 import { auditLog } from '../lib/audit'
 
+async function assertNoOverlap(conn, startDate, endDate, excludeId = null) {
+  const params = [startDate, endDate]
+  let sql = `SELECT id, name, DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date, DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date FROM school_years WHERE ? <= end_date AND ? >= start_date`
+  if (excludeId) {
+    sql += ' AND id <> ?'
+    params.push(excludeId)
+  }
+  sql += ' LIMIT 1'
+  const [rows] = await conn.query(sql, params)
+  if (rows.length) {
+    const err = new Error(`School year overlaps ${rows[0].name} (${rows[0].start_date} to ${rows[0].end_date})`)
+    err.statusCode = 409
+    throw err
+  }
+}
+
 function isValidDate(value) {
   if (!value) return false
   const d = new Date(value)
@@ -57,14 +73,19 @@ export default async function handler(req, res) {
         conn = await db.getConnection()
         await conn.beginTransaction()
 
-        if (is_current) {
+        await assertNoOverlap(conn, start_date, end_date)
+
+        const [[countRow]] = await conn.query('SELECT COUNT(*) AS count FROM school_years')
+        const makeCurrent = Number(countRow.count) === 0 || !!is_current
+
+        if (makeCurrent) {
           await conn.query('UPDATE school_years SET is_current = 0')
         }
 
         const [result] = await conn.query(
           `INSERT INTO school_years (name, start_date, end_date, is_current)
            VALUES (?, ?, ?, ?)`,
-          [String(name).trim(), start_date, end_date, is_current ? 1 : 0]
+          [String(name).trim(), start_date, end_date, makeCurrent ? 1 : 0]
         )
 
         await auditLog(
@@ -73,7 +94,7 @@ export default async function handler(req, res) {
             action: 'school_year.create',
             entityType: 'school_year',
             entityId: result.insertId,
-            details: { name, start_date, end_date, is_current: !!is_current }
+            details: { name, start_date, end_date, is_current: makeCurrent }
           },
           conn
         )
@@ -91,6 +112,8 @@ export default async function handler(req, res) {
             conn.release()
           } catch {}
         }
+
+        if (err?.statusCode) return res.status(err.statusCode).json({ message: err.message })
 
         if (err?.code === 'ER_DUP_ENTRY') {
           return res.status(409).json({ message: 'School year already exists or duplicate current school year' })

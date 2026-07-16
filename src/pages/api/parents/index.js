@@ -2,6 +2,7 @@
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]'
 import db from '../db'
+import { auditLog } from '../lib/audit'
 
 export default async function handler(req, res) {
   try {
@@ -74,7 +75,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      // Create new parent
+      if (!['admin', 'teacher'].includes(session.user.role)) return res.status(403).json({ message: 'Forbidden' })
+
       const { first_name, last_name, contact_info = '' } = req.body
 
       if (!first_name || !last_name) {
@@ -82,10 +84,29 @@ export default async function handler(req, res) {
       }
 
       try {
+        const [dup] = await db.query(
+          `SELECT id FROM parents
+            WHERE is_deleted = 0
+              AND LOWER(first_name) = LOWER(?)
+              AND LOWER(last_name) = LOWER(?)
+              AND COALESCE(contact_info, '') = COALESCE(?, '')
+            LIMIT 1`,
+          [first_name.trim(), last_name.trim(), contact_info || null]
+        )
+        if (dup.length) return res.status(409).json({ message: 'A matching active parent already exists', id: dup[0].id })
+
         const [result] = await db.query(
           'INSERT INTO parents (first_name, last_name, contact_info, is_deleted, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
-          [first_name, last_name, contact_info]
+          [first_name.trim(), last_name.trim(), contact_info || null]
         )
+
+        await auditLog({
+          actorUserId: session.user.id,
+          action: 'parent.create',
+          entityType: 'parent',
+          entityId: result.insertId,
+          details: { first_name: first_name.trim(), last_name: last_name.trim(), contact_info }
+        })
 
         return res.status(201).json({
           id: result.insertId,

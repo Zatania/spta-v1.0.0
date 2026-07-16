@@ -57,7 +57,7 @@ export default async function handler(req, res) {
         CASE
           WHEN a.fee_type NOT IN ('fee','mixed') THEN 'not_required'
           WHEN pay.paid = 1 THEN 'paid'
-          WHEN c.id IS NOT NULL THEN 'contribution'
+          WHEN COALESCE(c.contribution_count, 0) > 0 THEN 'contribution'
           ELSE 'unpaid'
         END AS payment_status,
         COALESCE(pay.amount, 0) AS amount,
@@ -75,10 +75,14 @@ export default async function handler(req, res) {
       LEFT JOIN parents pa ON pa.id = sp.parent_id AND pa.is_deleted = 0
       LEFT JOIN attendance att ON att.activity_assignment_id = aa.id AND att.student_id = st.id
       LEFT JOIN payments pay ON pay.activity_assignment_id = aa.id AND pay.student_id = st.id
-      LEFT JOIN contributions c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
+      LEFT JOIN (
+      SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+      FROM contributions
+      GROUP BY activity_assignment_id, student_id
+    ) c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
       WHERE ${where.join(' AND ')}
       GROUP BY a.title, a.activity_date, g.name, sec.name, st.id, st.lrn, st.last_name, st.first_name,
-               att.status, att.parent_present, pay.paid, pay.amount, pay.payment_date, c.id, a.fee_type
+               att.status, att.parent_present, pay.paid, pay.amount, pay.payment_date, c.contribution_count, a.fee_type
       ORDER BY g.id, sec.name, st.last_name, st.first_name
     `
 

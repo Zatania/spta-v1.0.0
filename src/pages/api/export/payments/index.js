@@ -63,11 +63,11 @@ export default async function handler(req, res) {
         COALESCE(p.paid, 0) AS payment_paid,
         COALESCE(p.amount, 0) AS amount,
         DATE_FORMAT(p.payment_date, '%Y-%m-%d') AS payment_date,
-        CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_contribution,
+        CASE WHEN COALESCE(c.contribution_count, 0) > 0 THEN 1 ELSE 0 END AS has_contribution,
         CASE
           WHEN a.fee_type NOT IN ('fee','mixed') THEN 'not_required'
           WHEN p.paid = 1 THEN 'paid'
-          WHEN c.id IS NOT NULL THEN 'contribution'
+          WHEN COALESCE(c.contribution_count, 0) > 0 THEN 'contribution'
           ELSE 'unpaid'
         END AS payment_status
       FROM activity_assignments aa
@@ -80,7 +80,11 @@ export default async function handler(req, res) {
        AND en.section_id = aa.section_id
       JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
       LEFT JOIN payments p ON p.activity_assignment_id = aa.id AND p.student_id = st.id
-      LEFT JOIN contributions c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
+      LEFT JOIN (
+      SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+      FROM contributions
+      GROUP BY activity_assignment_id, student_id
+    ) c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
       WHERE ${where.join(' AND ')}
       ORDER BY a.activity_date DESC, g.id, s.name, st.last_name, st.first_name
     `

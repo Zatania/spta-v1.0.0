@@ -258,7 +258,7 @@ const Dashboard = () => {
   const parentIdsParam = () => (parentFilter && parentFilter.length ? parentFilter.map(p => p.id).join(',') : undefined)
 
   const selectedSchoolYear = useMemo(
-    () => schoolYears.find(sy => sy.id === schoolYearId) || null,
+    () => schoolYears.find(sy => String(sy.id) === String(schoolYearId)) || null,
     [schoolYears, schoolYearId]
   )
 
@@ -271,6 +271,7 @@ const Dashboard = () => {
           view: 'overview',
           from_date: fromDate || undefined,
           to_date: toDate || undefined,
+          parent_ids: parentIdsParam(),
           school_year_id: schoolYearId || undefined
         }
       })
@@ -289,6 +290,7 @@ const Dashboard = () => {
       const res = await axios.get('/api/summary', {
         params: {
           view: 'byGrade',
+          parent_ids: parentIdsParam(),
           school_year_id: schoolYearId || undefined
         }
       })

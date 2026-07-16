@@ -1,7 +1,8 @@
 // pages/api/parents/[id].js
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '../auth/[...nextauth]'
-import { getCurrentSchoolYearId } from '../lib/schoolYear'
+import { resolveSchoolYearId } from '../lib/schoolYear'
+import { auditLog } from '../lib/audit'
 import db from '../db'
 
 export default async function handler(req, res) {
@@ -21,7 +22,7 @@ export default async function handler(req, res) {
       if (!rows.length) return res.status(404).json({ message: 'Parent not found' })
 
       // also list their students
-      const currentSyId = await getCurrentSchoolYearId()
+      const currentSyId = await resolveSchoolYearId(req)
 
       const [students] = await db.query(
         `SELECT
@@ -53,6 +54,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'PUT') {
+      if (session.user.role !== 'admin') return res.status(403).json({ message: 'Admins only' })
+
       const { first_name, last_name, contact_info } = req.body
       if (!first_name || !last_name) return res.status(400).json({ message: 'Missing required fields' })
       await db.query(
@@ -60,12 +63,27 @@ export default async function handler(req, res) {
         [first_name, last_name, contact_info || null, parentId]
       )
 
+      await auditLog({ actorUserId: session.user.id, action: 'parent.update', entityType: 'parent', entityId: parentId, details: { first_name, last_name, contact_info } })
+
       return res.status(200).json({ message: 'Parent updated' })
     }
 
     if (req.method === 'DELETE') {
-      // soft delete
+      if (session.user.role !== 'admin') return res.status(403).json({ message: 'Admins only' })
+
+      const [[linked]] = await db.query(
+        `SELECT COUNT(*) AS count
+           FROM student_parents sp
+           JOIN students st ON st.id = sp.student_id AND st.is_deleted = 0
+          WHERE sp.parent_id = ?`,
+        [parentId]
+      )
+      if (Number(linked.count) > 0 && req.query.force !== '1') {
+        return res.status(400).json({ message: 'Parent is linked to active students. Use force=1 to confirm soft delete.', linked_students: Number(linked.count) })
+      }
+
       await db.query('UPDATE parents SET is_deleted = 1, deleted_at = NOW() WHERE id = ?', [parentId])
+      await auditLog({ actorUserId: session.user.id, action: 'parent.delete', entityType: 'parent', entityId: parentId, details: { force: req.query.force === '1', linked_students: Number(linked.count) } })
 
       // you may also want to remove student_parents links, but keeping links may be useful historically; optionally remove:
       // await db.query('DELETE FROM student_parents WHERE parent_id = ?', [parentId])

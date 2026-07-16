@@ -37,6 +37,7 @@ import { DataGrid } from '@mui/x-data-grid'
 import debounce from 'lodash.debounce'
 import { saveAs } from 'file-saver'
 import Autocomplete from '@mui/material/Autocomplete'
+import SchoolYearSelect from 'src/components/common/SchoolYearSelect'
 
 export default function StudentsPage() {
   const { data: session, status } = useSession()
@@ -48,6 +49,7 @@ export default function StudentsPage() {
   const [total, setTotal] = useState(0)
 
   const [schoolYears, setSchoolYears] = useState([])
+  const [schoolYearId, setSchoolYearId] = useState('')
   const [promoteOpen, setPromoteOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [activeRow, setActiveRow] = useState(null)
@@ -144,7 +146,12 @@ export default function StudentsPage() {
     // load school years once
     axios
       .get('/api/school-years')
-      .then(r => setSchoolYears(r.data ?? []))
+      .then(r => {
+        const list = r.data ?? []
+        setSchoolYears(list)
+        const current = list.find(sy => Number(sy.is_current) === 1)
+        if (current) setSchoolYearId(String(current.id))
+      })
       .catch(() => {})
   }, [])
 
@@ -172,14 +179,18 @@ export default function StudentsPage() {
   useEffect(() => {
     fetchMyInfo()
     fetchGrades()
-    fetchSectionsAll()
-    fetchTeachers()
     fetchParents()
   }, [])
 
   useEffect(() => {
-    fetchStudents()
-  }, [page, pageSize])
+    if (!schoolYearId) return
+    fetchSectionsAll()
+    if (session?.user?.role === 'admin') fetchTeachers()
+  }, [schoolYearId, session?.user?.role])
+
+  useEffect(() => {
+    if (schoolYearId) fetchStudents()
+  }, [page, pageSize, schoolYearId])
 
   // fetch current user + assigned sections (if teacher)
   const fetchMyInfo = async () => {
@@ -215,7 +226,7 @@ export default function StudentsPage() {
   // Fetch all non-deleted sections (for filters & student assignment)
   const fetchSectionsAll = async () => {
     try {
-      const res = await axios.get('/api/sections', { params: { page: 1, page_size: 1000 } })
+      const res = await axios.get('/api/sections', { params: { page: 1, page_size: 1000, school_year_id: schoolYearId || undefined } })
       const list = res.data?.sections ?? res.data ?? []
       setSectionsAll(
         list.map(s => ({
@@ -232,8 +243,13 @@ export default function StudentsPage() {
 
   // Fetch teachers for assignment
   const fetchTeachers = async () => {
+    if (session?.user?.role !== 'admin') {
+      setTeachers(me?.user ? [{ ...me.user, assigned_sections: me?.teacher?.assigned_sections ?? [] }] : [])
+      return
+    }
+
     try {
-      const res = await axios.get('/api/teachers/list')
+      const res = await axios.get('/api/teachers/list', { params: { school_year_id: schoolYearId || undefined } })
       setTeachers(res.data ?? [])
     } catch (err) {
       console.error('Failed to load teachers', err)
@@ -297,6 +313,8 @@ export default function StudentsPage() {
         // For now, we leave params as-is so teacher can pick which of their sections to filter by.
       }
     }
+
+    if (schoolYearId) params.school_year_id = schoolYearId
 
     // pagination
     params.page = (overrides.page ?? page) + 1
@@ -446,7 +464,7 @@ export default function StudentsPage() {
   const openEdit = async row => {
     setIsEditing(true)
     try {
-      const res = await axios.get(`/api/students/${row.id}`)
+      const res = await axios.get(`/api/students/${row.id}`, { params: { school_year_id: schoolYearId || undefined } })
       const stu = res.data
 
       const primaryParent = (stu.parents && stu.parents[0]) || null
@@ -514,6 +532,7 @@ export default function StudentsPage() {
       formData.append('teacher_id', form.teacher_id)
       formData.append('parent_id', form.parent_id)
       formData.append('parent_relation', form.parent_relation || '')
+      formData.append('school_year_id', schoolYearId || '')
 
       if (form.picture) {
         formData.append('picture', form.picture)
@@ -617,6 +636,7 @@ export default function StudentsPage() {
       if (built.grade_id) params.set('grade_id', built.grade_id)
       if (built.section_id) params.set('section_id', built.section_id)
       if (built.search) params.set('search', built.search)
+      if (built.school_year_id) params.set('school_year_id', built.school_year_id)
 
       const res = await axios.get(`/api/export/students?${params.toString()}`, { responseType: 'blob' })
       const cd = res.headers['content-disposition'] || ''
@@ -704,13 +724,11 @@ export default function StudentsPage() {
 
   // Get available sections based on selected grade and user role
   const getAvailableSections = () => {
-    if (isTeacher && !isEditing) {
-      // For teachers creating new students, limit to assigned sections
+    if (isTeacher) {
       return teacherAssignedSections.filter(s => !form.grade_id || String(s.grade_id) === String(form.grade_id))
-    } else {
-      // For admins or when editing, show all sections for the selected grade
-      return sectionsAll.filter(s => !form.grade_id || String(s.grade_id) === String(form.grade_id))
     }
+
+    return sectionsAll.filter(s => !form.grade_id || String(s.grade_id) === String(form.grade_id))
   }
 
   // Get available teachers based on selected grade and section
@@ -818,19 +836,13 @@ export default function StudentsPage() {
           rows={students}
           columns={columns}
           autoHeight
-          pageSize={pageSize}
-          rowsPerPageOptions={[10, 25, 50]}
+          paginationModel={{ page, pageSize }}
+          pageSizeOptions={[10, 25, 50]}
           paginationMode='server'
           rowCount={total}
-          page={page}
-          onPageChange={newPage => {
-            setPage(newPage)
-            fetchStudents({ page: newPage })
-          }}
-          onPageSizeChange={newSize => {
-            setPageSize(newSize)
-            setPage(0)
-            fetchStudents({ page: 0, pageSize: newSize })
+          onPaginationModelChange={model => {
+            setPage(model.page)
+            setPageSize(model.pageSize)
           }}
           getRowId={r => r.id}
           loading={loading}

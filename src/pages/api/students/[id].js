@@ -5,13 +5,22 @@ import db from '../db'
 import formidable from 'formidable'
 import fs from 'fs'
 import path from 'path'
-import { getCurrentSchoolYearId } from '../lib/schoolYear'
+import { resolveSchoolYearId, getCurrentSchoolYearId, assertSchoolYearExists } from '../lib/schoolYear'
 import { auditLog } from '../lib/audit'
 
 export const config = { api: { bodyParser: false } }
 
 function firstValue(v) {
   return Array.isArray(v) ? v[0] : v
+}
+
+async function getTargetSchoolYearId(rawValue) {
+  const raw = Number(rawValue)
+  if (Number.isInteger(raw) && raw > 0) {
+    const sy = await assertSchoolYearExists(raw)
+    return Number(sy.id)
+  }
+  return getCurrentSchoolYearId()
 }
 
 async function teacherOwnsStudent(userId, studentId, schoolYearId, conn = db) {
@@ -55,9 +64,8 @@ export default async function handler(req, res) {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
 
-    const currentSyId = await getCurrentSchoolYearId()
-
     if (req.method === 'GET') {
+      const currentSyId = await resolveSchoolYearId(req)
       if (session.user.role === 'teacher') {
         const allowed = await teacherOwnsStudent(session.user.id, studentId, currentSyId)
         if (!allowed) return res.status(403).json({ message: 'Forbidden' })
@@ -120,6 +128,7 @@ export default async function handler(req, res) {
         form.parse(req, (err, f, fl) => (err ? reject(err) : resolve([f, fl])))
       })
 
+      const currentSyId = await getTargetSchoolYearId(firstValue(fields.school_year_id))
       const first_name = firstValue(fields.first_name)?.trim()
       const last_name = firstValue(fields.last_name)?.trim()
       const lrn = firstValue(fields.lrn)?.trim()
@@ -144,8 +153,8 @@ export default async function handler(req, res) {
       if (!section) return res.status(400).json({ message: 'Section not found or deleted' })
       if (Number(section.grade_id) !== grade_id) return res.status(400).json({ message: 'Section does not belong to grade' })
 
-      const [dup] = await db.query('SELECT id FROM students WHERE lrn = ? AND id != ? AND is_deleted = 0 LIMIT 1', [lrn, studentId])
-      if (dup.length) return res.status(409).json({ message: 'LRN already in use' })
+      const [dup] = await db.query('SELECT id FROM students WHERE lrn = ? AND id != ? LIMIT 1', [lrn, studentId])
+      if (dup.length) return res.status(409).json({ message: 'LRN already in use, including deleted/inactive records' })
 
       let conn
       let newPictureUrl = null
@@ -260,10 +269,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'DELETE') {
-      if (session.user.role === 'teacher') {
-        const allowed = await teacherOwnsStudent(session.user.id, studentId, currentSyId)
-        if (!allowed) return res.status(403).json({ message: 'Forbidden' })
-      }
+      if (session.user.role !== 'admin') return res.status(403).json({ message: 'Admins only. Teachers should transfer/update enrollment instead of deleting students.' })
+      const currentSyId = await getCurrentSchoolYearId()
 
       const [[studentData]] = await db.query('SELECT picture_url FROM students WHERE id = ? LIMIT 1', [studentId])
       await db.query('UPDATE students SET is_deleted = 1, deleted_at = NOW() WHERE id = ?', [studentId])

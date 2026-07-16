@@ -26,6 +26,7 @@ export default async function handler(req, res) {
   try {
     const session = await getServerSession(req, res, authOptions)
     if (!session?.user) return res.status(401).json({ message: 'Not authenticated' })
+    if (session.user.role !== 'admin') return res.status(403).json({ message: 'Admins only' })
 
     const syId = await resolveSchoolYearId(req)
 

@@ -121,7 +121,7 @@ export default async function handler(req, res) {
             SUM(CASE
                   WHEN a.fee_type IN ('fee','mixed')
                    AND COALESCE(p.paid, 0) = 0
-                   AND c.id IS NULL
+                   AND COALESCE(c.contribution_count, 0) = 0
                   THEN 1 ELSE 0
                 END) AS total_unpaid,
             SUM(CASE WHEN a.fee_type IN ('fee','mixed') AND p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total
@@ -136,7 +136,11 @@ export default async function handler(req, res) {
            LEFT JOIN payments p
              ON p.activity_assignment_id = aa.id
             AND p.student_id = st.id
-           LEFT JOIN contributions c
+           LEFT JOIN (
+             SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+               FROM contributions
+              GROUP BY activity_assignment_id, student_id
+           ) c
              ON c.activity_assignment_id = aa.id
             AND c.student_id = st.id
           WHERE a.school_year_id = ?
@@ -229,7 +233,7 @@ export default async function handler(req, res) {
             SUM(CASE
                   WHEN a.fee_type IN ('fee','mixed')
                    AND COALESCE(p.paid, 0) = 0
-                   AND c.id IS NULL
+                   AND COALESCE(c.contribution_count, 0) = 0
                   THEN 1 ELSE 0
                 END) AS unpaid_count,
             SUM(CASE WHEN a.fee_type IN ('fee','mixed') AND p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total
@@ -243,7 +247,11 @@ export default async function handler(req, res) {
            JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
            LEFT JOIN attendance att ON att.activity_assignment_id = aa.id AND att.student_id = st.id
            LEFT JOIN payments p ON p.activity_assignment_id = aa.id AND p.student_id = st.id
-           LEFT JOIN contributions c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
+           LEFT JOIN (
+             SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+               FROM contributions
+              GROUP BY activity_assignment_id, student_id
+           ) c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
           WHERE a.is_deleted = 0
             AND a.school_year_id = ?
             AND aa.section_id = ?
@@ -298,7 +306,7 @@ export default async function handler(req, res) {
             SUM(CASE
                   WHEN a.fee_type IN ('fee','mixed')
                    AND COALESCE(p.paid, 0) = 0
-                   AND c.id IS NULL
+                   AND COALESCE(c.contribution_count, 0) = 0
                   THEN 1 ELSE 0
                 END) AS unpaid_count,
             COUNT(DISTINCT en.student_id) AS total_expected
@@ -314,7 +322,11 @@ export default async function handler(req, res) {
            JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
            LEFT JOIN attendance att ON att.activity_assignment_id = aa.id AND att.student_id = st.id
            LEFT JOIN payments p ON p.activity_assignment_id = aa.id AND p.student_id = st.id
-           LEFT JOIN contributions c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
+           LEFT JOIN (
+             SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+               FROM contributions
+              GROUP BY activity_assignment_id, student_id
+           ) c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
           WHERE aa.activity_id = ?
           GROUP BY aa.grade_id, g.name, aa.section_id, s.name
           ORDER BY aa.grade_id, s.name`,
@@ -360,7 +372,7 @@ export default async function handler(req, res) {
             SUM(CASE
                   WHEN a.fee_type IN ('fee','mixed')
                    AND COALESCE(p.paid, 0) = 0
-                   AND c.id IS NULL
+                   AND COALESCE(c.contribution_count, 0) = 0
                   THEN 1 ELSE 0
                 END) AS unpaid_count,
             SUM(CASE WHEN a.fee_type IN ('fee','mixed') AND p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total,
@@ -376,7 +388,11 @@ export default async function handler(req, res) {
             AND en.status = 'active'
            JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
            LEFT JOIN payments p ON p.activity_assignment_id = aa.id AND p.student_id = st.id
-           LEFT JOIN contributions c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
+           LEFT JOIN (
+             SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+               FROM contributions
+              GROUP BY activity_assignment_id, student_id
+           ) c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
           WHERE a.school_year_id = ?
             ${date.sql}
             ${parent.sql}
@@ -400,7 +416,7 @@ export default async function handler(req, res) {
             SUM(CASE
                   WHEN a.fee_type IN ('fee','mixed')
                    AND COALESCE(p.paid, 0) = 0
-                   AND c.id IS NULL
+                   AND COALESCE(c.contribution_count, 0) = 0
                   THEN 1 ELSE 0
                 END) AS unpaid_count,
             SUM(CASE WHEN a.fee_type IN ('fee','mixed') AND p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total,
@@ -416,7 +432,11 @@ export default async function handler(req, res) {
             AND en.status = 'active'
            JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
            LEFT JOIN payments p ON p.activity_assignment_id = aa.id AND p.student_id = st.id
-           LEFT JOIN contributions c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
+           LEFT JOIN (
+             SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+               FROM contributions
+              GROUP BY activity_assignment_id, student_id
+           ) c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
           WHERE a.school_year_id = ?
             ${date.sql}
             ${parent.sql}
@@ -506,7 +526,7 @@ export default async function handler(req, res) {
             SUM(CASE
                   WHEN a.fee_type IN ('fee','mixed')
                    AND COALESCE(p.paid, 0) = 0
-                   AND c.id IS NULL
+                   AND COALESCE(c.contribution_count, 0) = 0
                   THEN 1 ELSE 0
                 END) AS unpaid_count,
             SUM(CASE WHEN a.fee_type IN ('fee','mixed') AND p.paid = 1 THEN p.amount ELSE 0 END) AS paid_amount_total
@@ -520,7 +540,11 @@ export default async function handler(req, res) {
            JOIN students st ON st.id = en.student_id AND st.is_deleted = 0
            LEFT JOIN attendance att ON att.activity_assignment_id = aa.id AND att.student_id = st.id
            LEFT JOIN payments p ON p.activity_assignment_id = aa.id AND p.student_id = st.id
-           LEFT JOIN contributions c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
+           LEFT JOIN (
+             SELECT activity_assignment_id, student_id, COUNT(*) AS contribution_count
+               FROM contributions
+              GROUP BY activity_assignment_id, student_id
+           ) c ON c.activity_assignment_id = aa.id AND c.student_id = st.id
           WHERE a.is_deleted = 0
             AND a.school_year_id = ?
             ${date.sql}

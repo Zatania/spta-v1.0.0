@@ -3,6 +3,18 @@ import { authOptions } from '../auth/[...nextauth]'
 import db from '../db'
 import { auditLog } from '../lib/audit'
 
+async function assertNoOverlap(conn, startDate, endDate, excludeId) {
+  const [rows] = await conn.query(
+    `SELECT id, name, DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date, DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date FROM school_years WHERE ? <= end_date AND ? >= start_date AND id <> ? LIMIT 1`,
+    [startDate, endDate, excludeId]
+  )
+  if (rows.length) {
+    const err = new Error(`School year overlaps ${rows[0].name} (${rows[0].start_date} to ${rows[0].end_date})`)
+    err.statusCode = 409
+    throw err
+  }
+}
+
 function isValidDate(value) {
   if (!value) return false
   const d = new Date(value)
@@ -30,25 +42,45 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Start date cannot be after end date' })
       }
 
-      const [existing] = await db.query('SELECT id FROM school_years WHERE id = ? LIMIT 1', [id])
-      if (!existing.length) return res.status(404).json({ message: 'School year not found' })
+      const conn = await db.getConnection()
+      try {
+        await conn.beginTransaction()
+        const [existing] = await conn.query('SELECT id FROM school_years WHERE id = ? LIMIT 1', [id])
+        if (!existing.length) {
+          await conn.rollback()
+          conn.release()
+          return res.status(404).json({ message: 'School year not found' })
+        }
 
-      await db.query('UPDATE school_years SET name = ?, start_date = ?, end_date = ? WHERE id = ?', [
-        String(name).trim(),
-        start_date,
-        end_date,
-        id
-      ])
+        await assertNoOverlap(conn, start_date, end_date, id)
 
-      await auditLog({
-        actorUserId: session.user.id,
-        action: 'school_year.update',
-        entityType: 'school_year',
-        entityId: id,
-        details: { name, start_date, end_date }
-      })
+        await conn.query('UPDATE school_years SET name = ?, start_date = ?, end_date = ? WHERE id = ?', [
+          String(name).trim(),
+          start_date,
+          end_date,
+          id
+        ])
 
-      return res.status(200).json({ message: 'School year updated' })
+        await auditLog({
+          actorUserId: session.user.id,
+          action: 'school_year.update',
+          entityType: 'school_year',
+          entityId: id,
+          details: { name, start_date, end_date }
+        }, conn)
+
+        await conn.commit()
+        conn.release()
+        return res.status(200).json({ message: 'School year updated' })
+      } catch (err) {
+        try { await conn.rollback() } catch {}
+        try { conn.release() } catch {}
+        if (err?.statusCode) return res.status(err.statusCode).json({ message: err.message })
+        if (err?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Duplicate school year name' })
+        throw err
+      }
+
+
     }
 
     if (req.method === 'DELETE') {
